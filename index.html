@@ -130,7 +130,7 @@ function computeAll(records,subMeta){
     return{q:cq,ql:qtrLabel(cq),sz,retention};
   });
 
-  // MoM/YoY growth
+  // MoM & YoY growth
   const momData=monthly.map((m,i)=>{
     const prev=i>0?monthly[i-1]:null;
     const yoyIdx=monthly.findIndex(x=>{const[cy2,cm]=m.mk.split("-");return x.mk===(parseInt(cy2)-1)+"-"+cm});
