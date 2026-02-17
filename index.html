@@ -44,8 +44,8 @@ const URLS={
   Subscription:"https://docs.google.com/spreadsheets/d/e/2PACX-1vSoHjEL3p4WVO3jd1xor1LerVW_MZi_1AE9z786U71JvlGAmV2JeFGh9xTYi4jXI1T-7X-o5UNYGKDa/pub?gid=317537148&single=true&output=csv",
 };
 
-const bg="#05080F",crd="#0D1321",crd2="#131B2E",bdr="#1A2540",tx="#E4E8F1",dm="#6B7A99";
-const am="#F6A623",bl="#4A90D9",gn="#34C759",pu="#9B6DFF",rd="#FF5A5F",pk="#FF6B9D",cy="#00D4AA",og="#FF8C42";
+const bg="#05080F",crd="#0D1321",crd2="#131B2E",bdr="#1A2540",grd="#1F2D4D",tx="#E4E8F1",dm="#6B7A99";
+const am="#F6A623",bl="#4A90D9",gn="#34C759",pu="#9B6DFF",rd="#FF5A5F",pk="#FF6B9D",cy="#00D4AA",og="#E8734A";
 const phCol={Active:gn,Dormant:am,"At Risk":og,Churned:rd,"Sub Only":pu,New:cy};
 const rfCol={Champion:gn,Loyal:bl,"Potential Loyalist":cy,"At Risk":og,Hibernating:rd,Others:dm};
 
@@ -61,12 +61,11 @@ function rowsToObjects(rows){const hi=findHeader(rows);const headers=rows[hi].ma
 function parseNum(v){if(!v)return 0;const n=parseFloat(String(v).replace(/,/g,""));return isNaN(n)?0:n}
 
 function parseDate(v,monthCol){
-  if(!v)return null;var s=v.trim();
-  var year=null;
+  if(!v)return null;var s=v.trim();var year=null;
   if(monthCol){var mc=monthCol.trim();var ym=mc.match(/(\d{2})$/);if(ym)year=2000+parseInt(ym[1]);else if(mc.toLowerCase().includes("pre-launch")||mc.toLowerCase().includes("pre launch"))year=2024}
   var months={jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
   var m1=s.match(/^(\d{1,2})[\/\-]([A-Za-z]{3,})$/);
-  if(m1){var mn=months[(m1[2]).toLowerCase().slice(0,3)];if(mn!==undefined){return new Date(year||2025,mn,parseInt(m1[1]))}}
+  if(m1){var mn=months[(m1[2]).toLowerCase().slice(0,3)];if(mn!==undefined)return new Date(year||2025,mn,parseInt(m1[1]))}
   var m2=s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);if(m2)return new Date(parseInt(m2[3]),parseInt(m2[2])-1,parseInt(m2[1]));
   var m3=s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);if(m3)return new Date(parseInt(m3[1]),parseInt(m3[2])-1,parseInt(m3[3]));
   var d=new Date(s);return isNaN(d.getTime())?null:d;
@@ -74,63 +73,104 @@ function parseDate(v,monthCol){
 
 function monthKey(d){return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")}
 function monthLabel(mk){const[y,m]=mk.split("-");const ms=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];return ms[parseInt(m)-1]+" "+y.slice(2)}
-function qtrKey(mk){const[y,m]=mk.split("-");const q=Math.ceil(parseInt(m)/3);return y+"-Q"+q}
+function qtrKey(mk){const[y,m]=mk.split("-");return y+"-Q"+Math.ceil(parseInt(m)/3)}
 function qtrLabel(qk){const[y,q]=qk.split("-");return q+"'"+y.slice(2)}
 
 function processAllData(csvResults){
   const records=[];const subMeta=[];
   const boarding=rowsToObjects(csvResults.Boarding);
-  for(const r of boarding){if(r["Booking Status"]&&r["Booking Status"].toLowerCase()!=="confirmed")continue;const d=parseDate(r["Check In Date"],r["Month"]);if(!d)continue;const id=r["Identifier"];if(!id)continue;const stay=(r["Stay Type"]||"").toLowerCase();records.push({service:"Boarding",id,date:d,gross:stay==="subscription"?0:parseNum(r["Total Gross Amount"]),net:stay==="subscription"?0:parseNum(r["Total Net Amount"]),stay,isVisit:true})}
+  // Find the overnights column name dynamically
+  var onKey=null;if(boarding.length>0){for(const k of Object.keys(boarding[0])){if(k.toLowerCase().replace(/[^a-z]/g,"").includes("overnight")){onKey=k;break}}}
+  if(!onKey&&boarding.length>0&&boarding[0]["# Overnights"]!==undefined)onKey="# Overnights";
+  for(const r of boarding){if(r["Booking Status"]&&r["Booking Status"].toLowerCase()!=="confirmed")continue;const d=parseDate(r["Check In Date"],r["Month"]);if(!d)continue;const id=r["Identifier"];if(!id)continue;const stay=(r["Stay Type"]||"").toLowerCase();const overnights=onKey?parseNum(r[onKey]):0;records.push({service:"Boarding",id,date:d,gross:stay==="subscription"?0:parseNum(r["Total Gross Amount"]),net:stay==="subscription"?0:parseNum(r["Total Net Amount"]),grossRaw:parseNum(r["Total Gross Amount"]),netRaw:parseNum(r["Total Net Amount"]),stay,isBooking:true,overnights:overnights})}
   const daycare=rowsToObjects(csvResults.Daycare);
-  for(const r of daycare){if(r["Booking Status"]&&r["Booking Status"].toLowerCase()!=="confirmed")continue;const d=parseDate(r["Check In Date"],r["Month"]);if(!d)continue;const id=r["Identifier"];if(!id)continue;const stay=(r["Stay Type"]||"").toLowerCase();records.push({service:"Daycare",id,date:d,gross:stay==="subscription"?0:parseNum(r["Total Gross Amount"]),net:stay==="subscription"?0:parseNum(r["Total Net Amount"]),stay,isVisit:true})}
+  for(const r of daycare){if(r["Booking Status"]&&r["Booking Status"].toLowerCase()!=="confirmed")continue;const d=parseDate(r["Check In Date"],r["Month"]);if(!d)continue;const id=r["Identifier"];if(!id)continue;const stay=(r["Stay Type"]||"").toLowerCase();records.push({service:"Daycare",id,date:d,gross:stay==="subscription"?0:parseNum(r["Total Gross Amount"]),net:stay==="subscription"?0:parseNum(r["Total Net Amount"]),grossRaw:parseNum(r["Total Gross Amount"]),netRaw:parseNum(r["Total Net Amount"]),stay,isBooking:true,overnights:0})}
   const play=rowsToObjects(csvResults.Play);
-  for(const r of play){if(r["Booking Status"]&&r["Booking Status"].toLowerCase()!=="confirmed")continue;const d=parseDate(r["Check In Date"],r["Month"]);if(!d)continue;const id=r["Identifier"];if(!id)continue;records.push({service:"Play",id,date:d,gross:parseNum(r["Total Gross Amount"]),net:parseNum(r["Total Net Amount"]),stay:"ppu",isVisit:true})}
+  for(const r of play){if(r["Booking Status"]&&r["Booking Status"].toLowerCase()!=="confirmed")continue;const d=parseDate(r["Check In Date"],r["Month"]);if(!d)continue;const id=r["Identifier"];if(!id)continue;records.push({service:"Play",id,date:d,gross:parseNum(r["Total Gross Amount"]),net:parseNum(r["Total Net Amount"]),grossRaw:parseNum(r["Total Gross Amount"]),netRaw:parseNum(r["Total Net Amount"]),stay:"ppu",isBooking:true,overnights:0})}
   const grooming=rowsToObjects(csvResults.Grooming);
-  for(const r of grooming){if(r["Booking Status"]&&r["Booking Status"].toLowerCase()!=="confirmed")continue;const d=parseDate(r["Service Date"],r["Month"]);if(!d)continue;const id=r["Identifier"];if(!id)continue;records.push({service:"Grooming",id,date:d,gross:parseNum(r["Total Gross Amount"]),net:parseNum(r["Total Net Amount"]),stay:"ppu",isVisit:true})}
+  for(const r of grooming){if(r["Booking Status"]&&r["Booking Status"].toLowerCase()!=="confirmed")continue;const d=parseDate(r["Service Date"],r["Month"]);if(!d)continue;const id=r["Identifier"];if(!id)continue;records.push({service:"Grooming",id,date:d,gross:parseNum(r["Total Gross Amount"]),net:parseNum(r["Total Net Amount"]),grossRaw:parseNum(r["Total Gross Amount"]),netRaw:parseNum(r["Total Net Amount"]),stay:"ppu",isBooking:true,overnights:0})}
   const subs=rowsToObjects(csvResults.Subscription);
-  for(const r of subs){if(r["Booking Status"]&&r["Booking Status"].toLowerCase()!=="confirmed")continue;const d=parseDate(r["Payment Date"],r["Month"]);if(!d)continue;const id=r["Identifier"];if(!id)continue;records.push({service:"Subscription",id,date:d,gross:parseNum(r["Total Gross Amount"]),net:parseNum(r["Total Net Amount"]),stay:"subscription",isVisit:false});subMeta.push({id,type:(r["Type"]||"").trim(),subFor:(r["Subscription For"]||"").trim()})}
+  for(const r of subs){if(r["Booking Status"]&&r["Booking Status"].toLowerCase()!=="confirmed")continue;const d=parseDate(r["Payment Date"],r["Month"]);if(!d)continue;const id=r["Identifier"];if(!id)continue;records.push({service:"Subscription",id,date:d,gross:parseNum(r["Total Gross Amount"]),net:parseNum(r["Total Net Amount"]),grossRaw:parseNum(r["Total Gross Amount"]),netRaw:parseNum(r["Total Net Amount"]),stay:"subscription",isBooking:false,overnights:0});subMeta.push({id,type:(r["Type"]||"").trim(),subFor:(r["Subscription For"]||"").trim()})}
   records.forEach(r=>{r.mk=monthKey(r.date)});
   var now=new Date();var cutoff=now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0");
   return{records:records.filter(r=>r.mk<=cutoff),subMeta};
 }
 
 function computeAll(records,subMeta){
-  const visits=records.filter(r=>r.isVisit);
-  const firstVisit={};for(const r of visits){if(!firstVisit[r.id]||r.date<firstVisit[r.id])firstVisit[r.id]=r.date}
+  const bookings=records.filter(r=>r.isBooking);
+  const firstBooking={};for(const r of bookings){if(!firstBooking[r.id]||r.date<firstBooking[r.id])firstBooking[r.id]=r.date}
   const monthSet=new Set(records.map(r=>r.mk));const allMonths=[...monthSet].sort();
 
+  // Monthly data with gross tracking
   const monthly=allMonths.map(mk=>{
-    const mr=records.filter(r=>r.mk===mk);const mv=visits.filter(r=>r.mk===mk);
-    const ids=new Set(mv.map(r=>r.id));const newIds=new Set();
-    for(const id of ids){if(firstVisit[id]&&monthKey(firstVisit[id])===mk)newIds.add(id)}
-    let Bn=0,Dn=0,Pn=0,Gn=0,Sn=0,totG=0,totN=0;
-    for(const r of mr){totG+=r.gross;totN+=r.net;if(r.service==="Boarding")Bn+=r.net;else if(r.service==="Daycare")Dn+=r.net;else if(r.service==="Play")Pn+=r.net;else if(r.service==="Grooming")Gn+=r.net;else if(r.service==="Subscription")Sn+=r.net}
-    return{l:monthLabel(mk),mk,bk:mv.length,uc:ids.size,nc:newIds.size,g:totG,n:totN,Bn,Dn,Pn,Gn,Sn,sb:mr.filter(r=>r.service==="Subscription").reduce((a,r)=>a+r.net,0),ids:[...ids]};
+    const mr=records.filter(r=>r.mk===mk);const mb=bookings.filter(r=>r.mk===mk);
+    const ids=new Set(mb.map(r=>r.id));const newIds=new Set();
+    for(const id of ids){if(firstBooking[id]&&monthKey(firstBooking[id])===mk)newIds.add(id)}
+    let Bn=0,Dn=0,Pn=0,Gn=0,Sn=0,BnG=0,DnG=0,PnG=0,GnG=0,SnG=0,totG=0,totN=0;
+    for(const r of mr){totG+=r.gross;totN+=r.net;
+      if(r.service==="Boarding"){Bn+=r.net;BnG+=r.gross}
+      else if(r.service==="Daycare"){Dn+=r.net;DnG+=r.gross}
+      else if(r.service==="Play"){Pn+=r.net;PnG+=r.gross}
+      else if(r.service==="Grooming"){Gn+=r.net;GnG+=r.gross}
+      else if(r.service==="Subscription"){Sn+=r.net;SnG+=r.gross}}
+    const subBk=mb.filter(r=>r.stay==="subscription").length;
+    const ppuBk=mb.length-subBk;
+    const subRev=mr.filter(r=>r.service==="Subscription").reduce((a,r)=>a+r.net,0);
+    const ppuRev=totN-subRev;
+    return{l:monthLabel(mk),mk,bk:mb.length,uc:ids.size,nc:newIds.size,g:totG,n:totN,
+      Bn,Dn,Pn,Gn,Sn,BnG,DnG,PnG,GnG,SnG,
+      sb:subRev,ppuRev,subBk,ppuBk,ids:[...ids]};
   });
 
-  const visitCounts={};for(const r of visits){visitCounts[r.id]=(visitCounts[r.id]||0)+1}
-  const visitsByPerson={};for(const r of visits){if(!visitsByPerson[r.id])visitsByPerson[r.id]=[];visitsByPerson[r.id].push(r.date)}
-  const ttrDays={};for(const[id,dates]of Object.entries(visitsByPerson)){dates.sort((a,b)=>a-b);if(dates.length>=2)ttrDays[id]=(dates[1]-dates[0])/864e5}
+  const bookingCounts={};for(const r of bookings){bookingCounts[r.id]=(bookingCounts[r.id]||0)+1}
+  const bookingsByPerson={};for(const r of bookings){if(!bookingsByPerson[r.id])bookingsByPerson[r.id]=[];bookingsByPerson[r.id].push(r.date)}
+  const ttrDays={};for(const[id,dates]of Object.entries(bookingsByPerson)){dates.sort((a,b)=>a-b);if(dates.length>=2)ttrDays[id]=(dates[1]-dates[0])/864e5}
 
+  // Residency per customer: boarding overnights + daycare count + play count + grooming count
+  const residency={};
+  for(const r of bookings){
+    if(!residency[r.id])residency[r.id]=0;
+    if(r.service==="Boarding")residency[r.id]+=(r.overnights||1);
+    else residency[r.id]+=1;// Daycare, Play, Grooming each count as 1
+  }
+
+  // Monthly cohorts
   const cohorts=allMonths.map(mk=>{
-    const cids=Object.entries(firstVisit).filter(([,d])=>monthKey(d)===mk).map(([id])=>id);
+    const cids=Object.entries(firstBooking).filter(([,d])=>monthKey(d)===mk).map(([id])=>id);
     const sz=cids.length;if(!sz)return{l:monthLabel(mk),mk,sz:0,g2:0,g3:0,g5:0,net:0,arpu:0,ttr:null,d30:0,d60:0,d90:0,d180:0};
     let g2=0,g3=0,g5=0,cnet=0,ttrSum=0,ttrC=0,d30=0,d60=0,d90=0,d180=0;
-    for(const id of cids){const vc=visitCounts[id]||0;if(vc>=2)g2++;if(vc>=3)g3++;if(vc>=5)g5++;cnet+=records.filter(r=>r.id===id).reduce((a,r)=>a+r.net,0);const tt=ttrDays[id];if(tt!==undefined){ttrSum+=tt;ttrC++;if(tt<=30)d30++;if(tt<=60)d60++;if(tt<=90)d90++;if(tt<=180)d180++}}
+    for(const id of cids){const vc=bookingCounts[id]||0;if(vc>=2)g2++;if(vc>=3)g3++;if(vc>=5)g5++;cnet+=records.filter(r=>r.id===id).reduce((a,r)=>a+r.net,0);const tt=ttrDays[id];if(tt!==undefined){ttrSum+=tt;ttrC++;if(tt<=30)d30++;if(tt<=60)d60++;if(tt<=90)d90++;if(tt<=180)d180++}}
     return{l:monthLabel(mk),mk,sz,g2,g3,g5,net:Math.round(cnet),arpu:Math.round(cnet/sz),ttr:ttrC>0?+(ttrSum/ttrC).toFixed(1):null,d30,d60,d90,d180};
+  });
+
+  // Monthly retention heatmap: for each cohort month, % active in subsequent months
+  const monthlyRetention=allMonths.map(cmk=>{
+    const cids=Object.entries(firstBooking).filter(([,d])=>monthKey(d)===cmk).map(([id])=>id);
+    const sz=cids.length;
+    const retention={};
+    const bookingsByMonth={};for(const r of bookings){if(!bookingsByMonth[r.mk])bookingsByMonth[r.mk]=new Set();bookingsByMonth[r.mk].add(r.id)}
+    for(let mi=allMonths.indexOf(cmk);mi<allMonths.length;mi++){
+      const tmk=allMonths[mi];
+      const active=cids.filter(id=>bookingsByMonth[tmk]&&bookingsByMonth[tmk].has(id)).length;
+      retention[tmk]=sz>0?+((active/sz)*100).toFixed(0):0;
+    }
+    return{l:monthLabel(cmk),mk:cmk,sz,retention};
   });
 
   // Quarterly retention heatmap
   const allQtrs=[...new Set(allMonths.map(qtrKey))].sort();
-  const qtrVisitors={};for(const mk of allMonths){const qk=qtrKey(mk);if(!qtrVisitors[qk])qtrVisitors[qk]=new Set();for(const r of visits.filter(r=>r.mk===mk))qtrVisitors[qk].add(r.id)}
-  const firstQtr={};for(const[id,d]of Object.entries(firstVisit))firstQtr[id]=qtrKey(monthKey(d));
+  const qtrVisitors={};for(const mk of allMonths){const qk=qtrKey(mk);if(!qtrVisitors[qk])qtrVisitors[qk]=new Set();for(const r of bookings.filter(r=>r.mk===mk))qtrVisitors[qk].add(r.id)}
+  const firstQtr={};for(const[id,d]of Object.entries(firstBooking))firstQtr[id]=qtrKey(monthKey(d));
   const qtrlyCohorts=allQtrs.map(cq=>{
     const cids=Object.entries(firstQtr).filter(([,q])=>q===cq).map(([id])=>id);const sz=cids.length;
     const retention={};for(let qi=allQtrs.indexOf(cq);qi<allQtrs.length;qi++){const tq=allQtrs[qi];const active=cids.filter(id=>qtrVisitors[tq]&&qtrVisitors[tq].has(id)).length;retention[tq]=sz>0?+((active/sz)*100).toFixed(0):0}
-    return{q:cq,ql:qtrLabel(cq),sz,retention};
+    // Quarterly booking depth
+    let g2=0,g3=0,g5=0,cnet=0,ttrSum=0,ttrC=0;
+    for(const id of cids){const vc=bookingCounts[id]||0;if(vc>=2)g2++;if(vc>=3)g3++;if(vc>=5)g5++;cnet+=records.filter(r=>r.id===id).reduce((a,r)=>a+r.net,0);const tt=ttrDays[id];if(tt!==undefined){ttrSum+=tt;ttrC++}}
+    return{q:cq,ql:qtrLabel(cq),sz,retention,g2,g3,g5,net:Math.round(cnet),arpu:sz>0?Math.round(cnet/sz):0,ttr:ttrC>0?+(ttrSum/ttrC).toFixed(1):null};
   });
 
-  // MoM & YoY growth
+  // MoM/YoY growth
   const momData=monthly.map((m,i)=>{
     const prev=i>0?monthly[i-1]:null;
     const yoyIdx=monthly.findIndex(x=>{const[cy2,cm]=m.mk.split("-");return x.mk===(parseInt(cy2)-1)+"-"+cm});
@@ -138,70 +178,68 @@ function computeAll(records,subMeta){
     return{l:m.l,mk:m.mk,revMoM:prev?pctChg(m.n,prev.n):null,bkMoM:prev?pctChg(m.bk,prev.bk):null,ucMoM:prev?pctChg(m.uc,prev.uc):null,revYoY:yoy?pctChg(m.n,yoy.n):null,bkYoY:yoy?pctChg(m.bk,yoy.bk):null,ucYoY:yoy?pctChg(m.uc,yoy.uc):null,rev:m.n,bk:m.bk,uc:m.uc};
   });
 
-  // Migration matrix
-  const now=new Date();const lastVisit={};
-  for(const r of visits){if(!lastVisit[r.id]||r.date>lastVisit[r.id])lastVisit[r.id]=r.date}
-  const allVisitors=Object.keys(firstVisit);
+  // Lifecycle phases
+  const now=new Date();const lastBooking={};
+  for(const r of bookings){if(!lastBooking[r.id]||r.date>lastBooking[r.id])lastBooking[r.id]=r.date}
+  const allCustomers=Object.keys(firstBooking);
   const totalSpend={};for(const r of records){totalSpend[r.id]=(totalSpend[r.id]||0)+r.net}
 
-  function phaseAt(id,asOfMk){
-    const fv=firstVisit[id];if(!fv)return null;
-    const[y,m]=asOfMk.split("-");const eom=new Date(parseInt(y),parseInt(m),0);
-    const lv=visits.filter(r=>r.id===id&&r.mk<=asOfMk).reduce((a,r)=>r.date>a?r.date:a,new Date(0));
+  function getPhase(id,asOf){
+    const fv=firstBooking[id];if(!fv)return null;
+    const lv=bookings.filter(r=>r.id===id&&r.date<=asOf).reduce((a,r)=>r.date>a?r.date:a,new Date(0));
     if(lv.getTime()===0)return null;
-    const rec=(eom-lv)/864e5;const dsf=(eom-fv)/864e5;
+    const rec=(asOf-lv)/864e5;const dsf=(asOf-fv)/864e5;
     if(dsf<=30)return"New";if(rec<90)return"Active";if(rec<180)return"Dormant";if(rec<=365)return"At Risk";return"Churned";
   }
-  const migrationMonths=allMonths.length>=2?[allMonths[allMonths.length-2],allMonths[allMonths.length-1]]:[];
-  let migration=[];
-  if(migrationMonths.length===2){
-    const ph=["New","Active","Dormant","At Risk","Churned"];
-    const matrix={};for(const f of ph)for(const t of ph)matrix[f+">"+t]=0;
-    for(const id of allVisitors){const p1=phaseAt(id,migrationMonths[0]);const p2=phaseAt(id,migrationMonths[1]);if(p1&&p2&&ph.includes(p1)&&ph.includes(p2))matrix[p1+">"+p2]++}
-    migration=ph.map(from=>({from,to:ph.map(to=>({to,count:matrix[from+">"+to]}))}));
-  }
 
-  // Sub vs PPU
-  const subBillingIds=new Set(records.filter(r=>r.service==="Subscription").map(r=>r.id));
-  const subVisitIds=new Set(visits.filter(r=>r.stay==="subscription").map(r=>r.id));
-  const allSubIds=new Set([...subBillingIds,...subVisitIds]);
-  const subVisitCount=visits.filter(r=>r.stay==="subscription").length;
-  const subBillingNet=records.filter(r=>r.service==="Subscription").reduce((a,r)=>a+r.net,0);
-  const ppuIds=new Set(allVisitors.filter(id=>!allSubIds.has(id)));
-
-  function groupStats(ids){
-    const n=ids.length;if(!n)return{count:0,totRev:0,avgRev:0,avgVisits:0,retPct:0};
-    let totRev=0,totVis=0,active=0;
-    for(const id of ids){totRev+=(totalSpend[id]||0);totVis+=(visitCounts[id]||0);if(lastVisit[id]&&(now-lastVisit[id])/864e5<90)active++}
-    return{count:n,totRev:Math.round(totRev),avgRev:Math.round(totRev/n),avgVisits:+(totVis/n).toFixed(1),retPct:spct(active,n)};
-  }
-  const subStats=groupStats([...allSubIds].filter(id=>firstVisit[id]));
-  const ppuStats=groupStats([...ppuIds]);
-  const subVsPpu=monthly.map(m=>{const subVis=visits.filter(r=>r.mk===m.mk&&r.stay==="subscription").length;return{l:m.l,SubRev:m.Sn,PPURev:m.n-m.Sn,SubVis:subVis,PPUVis:m.bk-subVis}});
-
-  // Lifecycle / RFM / Spenders
   const phases={};
-  for(const id of allVisitors){const rec=(now-lastVisit[id])/864e5;const dsf=(now-firstVisit[id])/864e5;let p;if(dsf<=30)p="New";else if(rec<90)p="Active";else if(rec<180)p="Dormant";else if(rec<=365)p="At Risk";else p="Churned";if(!phases[p])phases[p]=[];phases[p].push(id)}
-  const lifecycle=Object.entries(phases).filter(([,ids])=>ids.length>0).map(([phase,ids])=>({phase,count:ids.length,total_net:Math.round(ids.reduce((a,id)=>a+(totalSpend[id]||0),0)),avg_visits:+(ids.reduce((a,id)=>a+(visitCounts[id]||0),0)/ids.length).toFixed(1)}));
+  for(const id of allCustomers){const p=getPhase(id,now);if(p){if(!phases[p])phases[p]=[];phases[p].push(id)}}
+  const lifecycle=Object.entries(phases).filter(([,ids])=>ids.length>0).map(([phase,ids])=>({phase,count:ids.length,total_net:Math.round(ids.reduce((a,id)=>a+(totalSpend[id]||0),0)),avg_bookings:+(ids.reduce((a,id)=>a+(bookingCounts[id]||0),0)/ids.length).toFixed(1)}));
 
+  // RFM
   function rScore(r){if(r<=30)return 5;if(r<=60)return 4;if(r<=90)return 3;if(r<=180)return 2;return 1}
   function fScore(f){if(f<=1)return 1;if(f<=3)return 2;if(f<=6)return 3;if(f<=12)return 4;return 5}
   function mScore(m){if(m<=2000)return 1;if(m<=5000)return 2;if(m<=10000)return 3;if(m<=20000)return 4;return 5}
   const rfmMap={};
-  for(const id of allVisitors){const rec=(now-lastVisit[id])/864e5;const R=rScore(rec),F=fScore(visitCounts[id]||0),M=mScore(totalSpend[id]||0);let seg;if(R>=4&&F>=4&&M>=4)seg="Champion";else if(R>=4&&F>=3)seg="Loyal";else if(R>=3&&F>=2&&M>=3)seg="Potential Loyalist";else if(R<=2&&F>=3)seg="At Risk";else if(R<=2&&F<=2)seg="Hibernating";else seg="Others";if(!rfmMap[seg])rfmMap[seg]=[];rfmMap[seg].push(id)}
-  const rfmData=Object.entries(rfmMap).map(([rfm,ids])=>({rfm,count:ids.length,total_net:Math.round(ids.reduce((a,id)=>a+(totalSpend[id]||0),0)),avg_net:Math.round(ids.reduce((a,id)=>a+(totalSpend[id]||0),0)/ids.length),avg_visits:+(ids.reduce((a,id)=>a+(visitCounts[id]||0),0)/ids.length).toFixed(1)})).sort((a,b)=>b.total_net-a.total_net);
-  const spenderList=Object.keys(totalSpend).map(id=>{const rec=lastVisit[id]?(now-lastVisit[id])/864e5:9999;const dsf=firstVisit[id]?(now-firstVisit[id])/864e5:9999;let p;if(!firstVisit[id])p="Sub Only";else if(dsf<=30)p="New";else if(rec<90)p="Active";else if(rec<180)p="Dormant";else if(rec<=365)p="At Risk";else p="Churned";return{id,v:visitCounts[id]||0,n:Math.round(totalSpend[id]||0),p}}).sort((a,b)=>b.n-a.n).slice(0,15);
+  for(const id of allCustomers){const rec=(now-lastBooking[id])/864e5;const R=rScore(rec),F=fScore(bookingCounts[id]||0),M=mScore(totalSpend[id]||0);let seg;if(R>=4&&F>=4&&M>=4)seg="Champion";else if(R>=4&&F>=3)seg="Loyal";else if(R>=3&&F>=2&&M>=3)seg="Potential Loyalist";else if(R<=2&&F>=3)seg="At Risk";else if(R<=2&&F<=2)seg="Hibernating";else seg="Others";if(!rfmMap[seg])rfmMap[seg]=[];rfmMap[seg].push(id)}
+  const rfmData=Object.entries(rfmMap).map(([rfm,ids])=>({rfm,count:ids.length,total_net:Math.round(ids.reduce((a,id)=>a+(totalSpend[id]||0),0)),avg_net:Math.round(ids.reduce((a,id)=>a+(totalSpend[id]||0),0)/ids.length),avg_bookings:+(ids.reduce((a,id)=>a+(bookingCounts[id]||0),0)/ids.length).toFixed(1)})).sort((a,b)=>b.total_net-a.total_net);
 
-  const planMap={};for(const s of subMeta){const t=s.type||"Unknown";if(!planMap[t])planMap[t]={t,c:0};planMap[t].c++}
-  const idTypeMap={};for(const sm of subMeta)idTypeMap[sm.id]=sm.type;
-  const planNetMap={};for(const r of records.filter(r=>r.service==="Subscription")){const t=idTypeMap[r.id]||"Unknown";planNetMap[t]=(planNetMap[t]||0)+r.net}
-  const plans=Object.entries(planMap).map(([t,v])=>({t,c:v.c,n:Math.round(planNetMap[t]||0)})).sort((a,b)=>b.c-a.c).slice(0,12);
+  // All customers list with residency
+  const customerList=Object.keys(totalSpend).map(id=>{
+    const rec=lastBooking[id]?(now-lastBooking[id])/864e5:9999;
+    const dsf=firstBooking[id]?(now-firstBooking[id])/864e5:9999;
+    let p;if(!firstBooking[id])p="Sub Only";else if(dsf<=30)p="New";else if(rec<90)p="Active";else if(rec<180)p="Dormant";else if(rec<=365)p="At Risk";else p="Churned";
+    return{id,bk:bookingCounts[id]||0,n:Math.round(totalSpend[id]||0),p,res:residency[id]||0};
+  }).sort((a,b)=>b.n-a.n);
+
+  // Migration data (stored with all months so we can filter later)
+  function buildMigration(fromMk,toMk){
+    const ph=["New","Active","Dormant","At Risk","Churned"];
+    const[fy,fm]=fromMk.split("-");const fromDate=new Date(parseInt(fy),parseInt(fm),0);
+    const[ty,tm]=toMk.split("-");const toDate=new Date(parseInt(ty),parseInt(tm),0);
+    const matrix={};for(const f of ph)for(const t of ph)matrix[f+">"+t]=0;
+    for(const id of allCustomers){
+      const p1=getPhase(id,fromDate);const p2=getPhase(id,toDate);
+      if(p1&&p2&&ph.includes(p1)&&ph.includes(p2))matrix[p1+">"+p2]++;
+    }
+    return ph.map(from=>({from,to:ph.map(to=>({to,count:matrix[from+">"+to]}))}));
+  }
+
+  // Sub vs PPU (computed per filtered range later - store raw data)
+  const subBillingIds=new Set(records.filter(r=>r.service==="Subscription").map(r=>r.id));
+  const subBookingIds=new Set(bookings.filter(r=>r.stay==="subscription").map(r=>r.id));
+  const allSubIds=new Set([...subBillingIds,...subBookingIds]);
+  const subBillingNet=records.filter(r=>r.service==="Subscription").reduce((a,r)=>a+r.net,0);
+
   const subForMap={};for(const sm of subMeta)subForMap[sm.subFor]=(subForMap[sm.subFor]||0)+1;
   const ud={high:0,medium:0,low:0,zero:0};
-  for(const sid of allSubIds){const sv=visits.filter(r=>r.id===sid&&r.stay==="subscription").length;if(sv>=10)ud.high++;else if(sv>=5)ud.medium++;else if(sv>=1)ud.low++;else ud.zero++}
+  for(const sid of allSubIds){const sv=bookings.filter(r=>r.id===sid&&r.stay==="subscription").length;if(sv>=10)ud.high++;else if(sv>=5)ud.medium++;else if(sv>=1)ud.low++;else ud.zero++}
 
-  return{monthly,cohorts,lifecycle,rfmData,spenderList,qtrlyCohorts,allQtrs,momData,migration,migrationMonths,subStats,ppuStats,subVsPpu,
-    subKpis:{totalSubs:allSubIds.size,penetration:spct(allSubIds.size,allVisitors.length),totalNet:Math.round(subBillingNet),revShare:spct(subBillingNet,records.reduce((a,r)=>a+r.net,0)),avgSubValue:sdiv(subBillingNet,allSubIds.size),totalSubVisits:subVisitCount,avgVisitsPerSub:allSubIds.size>0?+(subVisitCount/allSubIds.size).toFixed(1):0,avgEffPrice:sdiv(subBillingNet,subVisitCount),subFor:subForMap},plans,ud};
+  return{monthly,cohorts,monthlyRetention,allMonths,lifecycle,rfmData,customerList,
+    qtrlyCohorts,allQtrs,momData,buildMigration,
+    records,bookings,allSubIds,allCustomers,firstBooking,lastBooking,bookingCounts,totalSpend,residency,
+    subKpis:{totalSubs:allSubIds.size,penetration:spct(allSubIds.size,allCustomers.length),totalNet:Math.round(subBillingNet),avgSubValue:sdiv(subBillingNet,allSubIds.size),subFor:subForMap},
+    ud};
 }
 
 // ═══ UI ═══
@@ -211,7 +249,7 @@ const Crd=({title,children})=>(<div style={{background:crd,border:"1px solid "+b
 const PBar=({label,value,max,color,sub})=>(<div style={{marginBottom:8}}><div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}><span style={{color:dm}}>{label}</span><span style={{color,fontWeight:600}}>{sub}</span></div><div style={{height:5,background:bdr,borderRadius:3,overflow:"hidden"}}><div style={{height:"100%",width:(max>0?Math.min((value/max)*100,100):0)+"%",background:color,borderRadius:3}}/></div></div>);
 const ChgBadge=({v})=>{if(v===null||v===undefined)return<span style={{color:dm}}>—</span>;const c=v>0?gn:v<0?rd:dm;return<span style={{color:c,fontWeight:600}}>{v>0?"+":""}{v}%</span>};
 
-// ═══ TAB 1: OVERVIEW + MoM/YoY ═══
+// ═══ TAB 1: OVERVIEW ═══
 const Tab1=({data,dedupUc,momData})=>{
   const[met,setMet]=useState("net");
   if(!data.length)return<div style={{color:dm,padding:20}}>No data</div>;
@@ -228,12 +266,23 @@ const Tab1=({data,dedupUc,momData})=>{
     </div>
     <Crd title="Monthly Revenue by Service">
       <div style={{display:"flex",gap:4,marginBottom:8}}>{["net","gross"].map(m=>(<button key={m} onClick={()=>setMet(m)} style={{background:met===m?am+"18":"transparent",color:met===m?am:dm,border:"1px solid "+(met===m?am+"40":"transparent"),borderRadius:6,padding:"4px 12px",fontSize:11,fontWeight:500}}>{m==="net"?"Net":"Gross"}</button>))}</div>
-      <ResponsiveContainer width="100%" height={280}>
-        <AreaChart data={data.map(d=>({month:d.l,Boarding:d.Bn,Daycare:d.Dn,Play:d.Pn,Grooming:d.Gn,Subscription:d.Sn}))}>
-          <defs><linearGradient id="gB" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={am} stopOpacity={0.3}/><stop offset="95%" stopColor={am} stopOpacity={0}/></linearGradient><linearGradient id="gD" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={bl} stopOpacity={0.3}/><stop offset="95%" stopColor={bl} stopOpacity={0}/></linearGradient><linearGradient id="gP" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={gn} stopOpacity={0.3}/><stop offset="95%" stopColor={gn} stopOpacity={0}/></linearGradient><linearGradient id="gG" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={pk} stopOpacity={0.3}/><stop offset="95%" stopColor={pk} stopOpacity={0}/></linearGradient><linearGradient id="gS" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={pu} stopOpacity={0.3}/><stop offset="95%" stopColor={pu} stopOpacity={0}/></linearGradient></defs>
-          <CartesianGrid strokeDasharray="3 3" stroke={bdr}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}} tickFormatter={fmt}/><Tooltip content={<CTip/>}/><Legend wrapperStyle={{fontSize:11}}/>
-          <Area type="monotone" dataKey="Boarding" stackId="1" stroke={am} fill="url(#gB)" strokeWidth={1.5}/><Area type="monotone" dataKey="Daycare" stackId="1" stroke={bl} fill="url(#gD)" strokeWidth={1.5}/><Area type="monotone" dataKey="Play" stackId="1" stroke={gn} fill="url(#gP)" strokeWidth={1.5}/><Area type="monotone" dataKey="Grooming" stackId="1" stroke={pk} fill="url(#gG)" strokeWidth={1.5}/><Area type="monotone" dataKey="Subscription" stackId="1" stroke={pu} fill="url(#gS)" strokeWidth={1.5}/>
-        </AreaChart>
+      <ResponsiveContainer width="100%" height={300}>
+        <ComposedChart data={data.map(d=>({month:d.l,
+          Boarding:met==="net"?d.Bn:d.BnG,Daycare:met==="net"?d.Dn:d.DnG,
+          Play:met==="net"?d.Pn:d.PnG,Grooming:met==="net"?d.Gn:d.GnG,
+          Subscription:met==="net"?d.Sn:d.SnG,
+          Total:met==="net"?d.n:d.g}))}>
+          <CartesianGrid strokeDasharray="3 3" stroke={grd}/>
+          <XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/>
+          <YAxis tick={{fill:dm,fontSize:10}} tickFormatter={fmt}/>
+          <Tooltip content={<CTip/>}/><Legend wrapperStyle={{fontSize:11}}/>
+          <Bar dataKey="Boarding" stackId="1" fill={am} radius={[0,0,0,0]} opacity={0.9}/>
+          <Bar dataKey="Daycare" stackId="1" fill={bl} opacity={0.9}/>
+          <Bar dataKey="Play" stackId="1" fill={gn} opacity={0.9}/>
+          <Bar dataKey="Grooming" stackId="1" fill={pk} opacity={0.9}/>
+          <Bar dataKey="Subscription" stackId="1" fill={pu} radius={[3,3,0,0]} opacity={0.9}/>
+          <Line type="monotone" dataKey="Total" stroke="#FFFFFF" strokeWidth={3} dot={{r:3,fill:"#FFFFFF",stroke:"#FFFFFF"}} name="Total Revenue"/>
+        </ComposedChart>
       </ResponsiveContainer>
     </Crd>
     <Crd title="MoM & YoY Growth Rates">
@@ -243,73 +292,120 @@ const Tab1=({data,dedupUc,momData})=>{
       </table></div>
     </Crd>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-      <Crd title="Customer Acquisition"><ResponsiveContainer width="100%" height={220}><ComposedChart data={data.map(d=>({month:d.l,New:d.nc,Active:d.uc}))}><CartesianGrid strokeDasharray="3 3" stroke={bdr}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}}/><Tooltip content={<CTip/>}/><Bar dataKey="New" fill={gn} name="New Customers" radius={[3,3,0,0]}/><Line type="monotone" dataKey="Active" stroke={am} strokeWidth={2} name="Unique Active" dot={{r:2}}/></ComposedChart></ResponsiveContainer></Crd>
-      <Crd title="Revenue MoM Growth %"><ResponsiveContainer width="100%" height={220}><ComposedChart data={fMom.filter(m=>m.revMoM!==null).map(m=>({month:m.l,MoM:m.revMoM}))}><CartesianGrid strokeDasharray="3 3" stroke={bdr}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}} tickFormatter={v=>v+"%"}/><Tooltip content={<CTip/>}/><Bar dataKey="MoM" name="MoM %" radius={[3,3,0,0]}>{fMom.filter(m=>m.revMoM!==null).map((m,i)=><Cell key={i} fill={m.revMoM>=0?gn:rd}/>)}</Bar></ComposedChart></ResponsiveContainer></Crd>
+      <Crd title="Customer Acquisition"><ResponsiveContainer width="100%" height={220}><ComposedChart data={data.map(d=>({month:d.l,New:d.nc,Active:d.uc}))}><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}}/><Tooltip content={<CTip/>}/><Bar dataKey="New" fill={gn} name="New Customers" radius={[3,3,0,0]} opacity={0.85}/><Line type="monotone" dataKey="Active" stroke={am} strokeWidth={2.5} name="Unique Active" dot={{r:3}}/></ComposedChart></ResponsiveContainer></Crd>
+      <Crd title="Revenue MoM Growth %"><ResponsiveContainer width="100%" height={220}><ComposedChart data={fMom.filter(m=>m.revMoM!==null).map(m=>({month:m.l,MoM:m.revMoM}))}><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}} tickFormatter={v=>v+"%"}/><Tooltip content={<CTip/>}/><Bar dataKey="MoM" name="MoM %" radius={[3,3,0,0]}>{fMom.filter(m=>m.revMoM!==null).map((m,i)=><Cell key={i} fill={m.revMoM>=0?gn:rd}/>)}</Bar></ComposedChart></ResponsiveContainer></Crd>
     </div>
-    <Crd title="Monthly Bookings and Revenue"><ResponsiveContainer width="100%" height={220}><ComposedChart data={data.map(d=>({month:d.l,Bookings:d.bk,Revenue:d.n}))}><CartesianGrid strokeDasharray="3 3" stroke={bdr}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis yAxisId="l" tick={{fill:dm,fontSize:10}}/><YAxis yAxisId="r" orientation="right" tick={{fill:dm,fontSize:10}} tickFormatter={fmt}/><Tooltip content={<CTip/>}/><Bar yAxisId="l" dataKey="Bookings" fill={bl} radius={[3,3,0,0]} opacity={0.7}/><Line yAxisId="r" type="monotone" dataKey="Revenue" stroke={gn} strokeWidth={2.5} dot={{r:2}}/></ComposedChart></ResponsiveContainer></Crd>
+    <Crd title="Monthly Bookings and Revenue">
+      <ResponsiveContainer width="100%" height={280}>
+        <ComposedChart data={data.map(d=>({month:d.l,PPU:d.ppuBk,Subscription:d.subBk,TotalRev:d.n,PPURev:d.ppuRev,SubRev:d.sb}))}>
+          <CartesianGrid strokeDasharray="3 3" stroke={grd}/>
+          <XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/>
+          <YAxis yAxisId="l" tick={{fill:dm,fontSize:10}}/>
+          <YAxis yAxisId="r" orientation="right" tick={{fill:dm,fontSize:10}} tickFormatter={fmt}/>
+          <Tooltip content={<CTip/>}/><Legend wrapperStyle={{fontSize:11}}/>
+          <Bar yAxisId="l" dataKey="PPU" stackId="bk" fill={og} name="PPU Bookings" radius={[0,0,0,0]} opacity={0.85}/>
+          <Bar yAxisId="l" dataKey="Subscription" stackId="bk" fill={pu} name="Sub Bookings" radius={[3,3,0,0]} opacity={0.85}/>
+          <Line yAxisId="r" type="monotone" dataKey="TotalRev" stroke="#FFFFFF" strokeWidth={3} name="Total Revenue" dot={{r:3,fill:"#FFFFFF",stroke:"#FFFFFF"}}/>
+          <Line yAxisId="r" type="monotone" dataKey="PPURev" stroke={og} strokeWidth={2} strokeDasharray="6 3" name="PPU Revenue" dot={{r:2,fill:og}}/>
+          <Line yAxisId="r" type="monotone" dataKey="SubRev" stroke={cy} strokeWidth={2} strokeDasharray="6 3" name="Sub Revenue" dot={{r:2,fill:cy}}/>
+        </ComposedChart>
+      </ResponsiveContainer>
+    </Crd>
   </div>);
 };
 
-// ═══ TAB 2: CUSTOMERS + MIGRATION ═══
-const Tab2=({lifecycle,rfmData,spenderList,migration,migrationMonths})=>{
+// ═══ TAB 2: CUSTOMERS ═══
+const Tab2=({lifecycle,rfmData,customerList,migration,migLabel})=>{
+  const[custSort,setCustSort]=useState("n");
+  const[custDir,setCustDir]=useState(-1);
   const tc=lifecycle.reduce((a,b)=>a+b.count,0);
   const ph=["New","Active","Dormant","At Risk","Churned"];
+  const sorted=[...customerList].sort((a,b)=>custDir*(a[custSort]-b[custSort])||b.n-a.n);
+  const doSort=(key)=>{if(custSort===key)setCustDir(d=>d*-1);else{setCustSort(key);setCustDir(-1)}};
   return(<div style={{display:"flex",flexDirection:"column",gap:14}}>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-      <Crd title="Lifecycle Segmentation"><div style={{display:"flex",gap:14}}><div style={{width:130}}><ResponsiveContainer width="100%" height={150}><PieChart><Pie data={lifecycle} cx="50%" cy="50%" outerRadius={60} innerRadius={32} dataKey="count" paddingAngle={2}>{lifecycle.map((e,i)=><Cell key={i} fill={phCol[e.phase]||dm}/>)}</Pie></PieChart></ResponsiveContainer></div><div style={{flex:1,display:"flex",flexDirection:"column",gap:7,justifyContent:"center"}}>{lifecycle.map(item=>{const p=tc>0?((item.count/tc)*100).toFixed(0):0;return(<div key={item.phase}><div style={{display:"flex",justifyContent:"space-between",fontSize:11}}><span><span style={{color:phCol[item.phase],fontWeight:700}}>{"\u25CF"} </span><span style={{color:tx}}>{item.phase}</span></span><span style={{color:dm}}>{item.count} ({p}%)</span></div><div style={{fontSize:10,color:dm}}>Avg {item.avg_visits} visits | {fmt(item.total_net)} rev</div></div>)})}</div></div></Crd>
-      <Crd title="RFM Segments"><ResponsiveContainer width="100%" height={190}><BarChart data={rfmData} layout="vertical"><CartesianGrid strokeDasharray="3 3" stroke={bdr}/><XAxis type="number" tick={{fill:dm,fontSize:10}}/><YAxis type="category" dataKey="rfm" tick={{fill:dm,fontSize:10}} width={120}/><Tooltip content={<CTip/>}/><Bar dataKey="count" name="Customers" radius={[0,4,4,0]}>{rfmData.map((e,i)=><Cell key={i} fill={rfCol[e.rfm]||dm}/>)}</Bar></BarChart></ResponsiveContainer></Crd>
+      <Crd title="Lifecycle Segmentation"><div style={{display:"flex",gap:14}}><div style={{width:130}}><ResponsiveContainer width="100%" height={150}><PieChart><Pie data={lifecycle} cx="50%" cy="50%" outerRadius={60} innerRadius={32} dataKey="count" paddingAngle={2}>{lifecycle.map((e,i)=><Cell key={i} fill={phCol[e.phase]||dm}/>)}</Pie></PieChart></ResponsiveContainer></div><div style={{flex:1,display:"flex",flexDirection:"column",gap:7,justifyContent:"center"}}>{lifecycle.map(item=>{const p=tc>0?((item.count/tc)*100).toFixed(0):0;return(<div key={item.phase}><div style={{display:"flex",justifyContent:"space-between",fontSize:11}}><span><span style={{color:phCol[item.phase],fontWeight:700}}>{"\u25CF"} </span><span style={{color:tx}}>{item.phase}</span></span><span style={{color:dm}}>{item.count} ({p}%)</span></div><div style={{fontSize:10,color:dm}}>Avg {item.avg_bookings} bookings | {fmt(item.total_net)} rev</div></div>)})}</div></div></Crd>
+      <Crd title="RFM Segments"><ResponsiveContainer width="100%" height={190}><BarChart data={rfmData} layout="vertical"><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis type="number" tick={{fill:dm,fontSize:10}}/><YAxis type="category" dataKey="rfm" tick={{fill:dm,fontSize:10}} width={120}/><Tooltip content={<CTip/>}/><Bar dataKey="count" name="Customers" radius={[0,4,4,0]}>{rfmData.map((e,i)=><Cell key={i} fill={rfCol[e.rfm]||dm}/>)}</Bar></BarChart></ResponsiveContainer></Crd>
     </div>
-    {migration.length>0&&<Crd title={"Customer Migration: "+monthLabel(migrationMonths[0])+" \u2192 "+monthLabel(migrationMonths[1])}>
+    {migration&&migration.length>0&&<Crd title={"Customer Migration: "+migLabel}>
       <div style={{overflowX:"auto"}}><table>
         <thead><tr style={{borderBottom:"1px solid "+bdr}}><th style={{minWidth:80}}>From \\ To</th>{ph.map(p=><th key={p} style={{color:phCol[p]||dm,textAlign:"center",minWidth:70}}>{p}</th>)}</tr></thead>
         <tbody>{migration.map((row,i)=>{const total=row.to.reduce((a,t)=>a+t.count,0);return(<tr key={i} style={{borderBottom:"1px solid "+bdr+"15"}}><td style={{color:phCol[row.from]||tx,fontWeight:600}}>{row.from}</td>{row.to.map((t,j)=>{const pct=total>0?Math.round((t.count/total)*100):0;const isStay=row.from===t.to;const isBetter=ph.indexOf(t.to)<ph.indexOf(row.from);const isWorse=ph.indexOf(t.to)>ph.indexOf(row.from);const bgc=t.count===0?"transparent":isStay?bl+"20":isBetter?gn+"20":isWorse?rd+"15":bdr+"30";return<td key={j} style={{textAlign:"center",background:bgc,borderRadius:4}}>{t.count>0?<div><div style={{color:tx,fontWeight:600,fontSize:13}}>{t.count}</div><div style={{color:dm,fontSize:9}}>{pct}%</div></div>:<span style={{color:bdr}}>—</span>}</td>})}</tr>)})}</tbody>
       </table></div>
       <div style={{display:"flex",gap:12,marginTop:8,fontSize:10}}><span style={{color:gn}}>{"\u25A0"} Improved</span><span style={{color:bl}}>{"\u25A0"} Retained</span><span style={{color:rd}}>{"\u25A0"} Declined</span></div>
     </Crd>}
-    <Crd title="RFM Revenue Contribution"><div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>{rfmData.filter(r=>r.total_net>100000).map(r=>(<div key={r.rfm} style={{background:crd2,borderRadius:8,padding:10}}><div style={{fontSize:12,fontWeight:600,color:rfCol[r.rfm]||tx}}>{r.rfm}</div><div style={{fontSize:17,fontWeight:700,color:tx,marginTop:3}}>{fmt(r.total_net)}</div><div style={{fontSize:10,color:dm}}>{r.count} cust | Avg {fmt(r.avg_net)} | {r.avg_visits} visits</div></div>))}</div></Crd>
-    <Crd title="Top 15 Spenders (Lifetime)"><div style={{overflowX:"auto"}}><table><thead><tr style={{borderBottom:"1px solid "+bdr}}>{["#","Pet + Parent","Visits","Net Revenue","Phase"].map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{spenderList.map((t,i)=>(<tr key={i} style={{borderBottom:"1px solid "+bdr+"20"}}><td style={{color:dm}}>{i+1}</td><td style={{color:tx,fontWeight:500}}>{t.id}</td><td style={{color:cy}}>{t.v}</td><td style={{color:gn,fontWeight:600}}>{fmt(t.n)}</td><td><span style={{color:phCol[t.p]||dm,fontSize:10,background:(phCol[t.p]||dm)+"18",padding:"2px 8px",borderRadius:4}}>{t.p}</span></td></tr>))}</tbody></table></div></Crd>
+    <Crd title="RFM Revenue Contribution"><div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>{rfmData.filter(r=>r.total_net>100000).map(r=>(<div key={r.rfm} style={{background:crd2,borderRadius:8,padding:10}}><div style={{fontSize:12,fontWeight:600,color:rfCol[r.rfm]||tx}}>{r.rfm}</div><div style={{fontSize:17,fontWeight:700,color:tx,marginTop:3}}>{fmt(r.total_net)}</div><div style={{fontSize:10,color:dm}}>{r.count} cust | Avg {fmt(r.avg_net)} | {r.avg_bookings} bookings</div></div>))}</div></Crd>
+    <Crd title={"All Customers ("+customerList.length+")"}>
+      <div style={{overflowX:"auto",maxHeight:500,overflowY:"auto"}}><table>
+        <thead style={{position:"sticky",top:0,background:crd,zIndex:1}}><tr style={{borderBottom:"1px solid "+bdr}}>
+          <th>#</th><th>Pet + Parent</th>
+          <th style={{cursor:"pointer"}} onClick={()=>doSort("bk")}>Bookings {custSort==="bk"?(custDir<0?"\u25BC":"\u25B2"):""}</th>
+          <th style={{cursor:"pointer"}} onClick={()=>doSort("res")}>Residency {custSort==="res"?(custDir<0?"\u25BC":"\u25B2"):""}</th>
+          <th style={{cursor:"pointer"}} onClick={()=>doSort("n")}>Net Revenue {custSort==="n"?(custDir<0?"\u25BC":"\u25B2"):""}</th>
+          <th>Phase</th>
+        </tr></thead>
+        <tbody>{sorted.map((t,i)=>(<tr key={i} style={{borderBottom:"1px solid "+bdr+"20"}}>
+          <td style={{color:dm}}>{i+1}</td>
+          <td style={{color:tx,fontWeight:500}}>{t.id}</td>
+          <td style={{color:cy}}>{t.bk}</td>
+          <td style={{color:bl,fontWeight:600}}>{t.res}</td>
+          <td style={{color:gn,fontWeight:600}}>{fmt(t.n)}</td>
+          <td><span style={{color:phCol[t.p]||dm,fontSize:10,background:(phCol[t.p]||dm)+"18",padding:"2px 8px",borderRadius:4}}>{t.p}</span></td>
+        </tr>))}</tbody>
+      </table></div>
+    </Crd>
   </div>);
 };
 
-// ═══ TAB 3: RETENTION + QUARTERLY HEATMAP ═══
-const Tab3=({cohorts,qtrlyCohorts,allQtrs})=>{
+// ═══ TAB 3: RETENTION ═══
+const Tab3=({cohorts,monthlyRetention,allMonths,qtrlyCohorts,allQtrs})=>{
   const[view,setView]=useState("monthly");
   const active=cohorts.filter(c=>c.sz>0);const intv=active.length>14?2:0;
   const activeQ=qtrlyCohorts.filter(c=>c.sz>0);
+  const activeMR=monthlyRetention.filter(c=>c.sz>0);
   return(<div style={{display:"flex",flexDirection:"column",gap:14}}>
     <div style={{display:"flex",gap:4}}>
       {["monthly","quarterly"].map(v=>(<button key={v} onClick={()=>setView(v)} style={{background:view===v?am+"18":"transparent",color:view===v?am:dm,border:"1px solid "+(view===v?am+"40":"transparent"),borderRadius:6,padding:"5px 14px",fontSize:11,fontWeight:500}}>{v==="monthly"?"Monthly Cohorts":"Quarterly Retention"}</button>))}
     </div>
     {view==="monthly"&&<>
-      <Crd title="Monthly Cohort Retention - Booking Depth"><div style={{overflowX:"auto"}}><table><thead><tr style={{borderBottom:"1px solid "+bdr}}>{["Cohort","Size","2+","3+","5+","Net Rev","ARPU","Days to 2nd"].map(h=><th key={h} style={{whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead><tbody>{active.map((c,i)=>{const p2=spct(c.g2,c.sz),p3=spct(c.g3,c.sz),p5=spct(c.g5,c.sz);return(<tr key={i} style={{borderBottom:"1px solid "+bdr+"15"}}><td style={{color:tx,fontWeight:500}}>{c.l}</td><td style={{color:cy}}>{c.sz}</td><td style={{color:p2>=80?gn:p2>=60?am:rd}}>{p2}%</td><td style={{color:p3>=60?gn:p3>=40?am:rd}}>{p3}%</td><td style={{color:dm}}>{p5}%</td><td style={{color:gn}}>{fmt(c.net)}</td><td style={{color:am}}>{fmt(c.arpu)}</td><td style={{color:c.ttr&&c.ttr<=14?gn:am}}>{c.ttr?c.ttr+"d":"-"}</td></tr>)})}</tbody></table></div></Crd>
-      <Crd title="Repeat Curves - % Reaching 2nd Visit"><ResponsiveContainer width="100%" height={280}><LineChart data={active.map(c=>({month:c.l,D30:spct(c.d30,c.sz),D60:spct(c.d60,c.sz),D90:spct(c.d90,c.sz),D180:spct(c.d180,c.sz)}))}><CartesianGrid strokeDasharray="3 3" stroke={bdr}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}} domain={[0,100]} tickFormatter={v=>v+"%"}/><Tooltip content={<CTip/>}/><Legend wrapperStyle={{fontSize:11}}/><Line type="monotone" dataKey="D30" stroke={gn} strokeWidth={2} name="By 30d" dot={{r:2}}/><Line type="monotone" dataKey="D60" stroke={bl} strokeWidth={2} name="By 60d" dot={{r:2}}/><Line type="monotone" dataKey="D90" stroke={am} strokeWidth={2} name="By 90d" dot={{r:2}}/><Line type="monotone" dataKey="D180" stroke={pu} strokeWidth={2} name="By 180d" dot={{r:2}}/></LineChart></ResponsiveContainer></Crd>
+      <Crd title="Monthly Retention Heatmap">
+        <div style={{fontSize:10,color:dm,marginBottom:8}}>% of each cohort active in subsequent months</div>
+        <div style={{overflowX:"auto"}}><table>
+          <thead><tr style={{borderBottom:"1px solid "+bdr}}><th style={{minWidth:60}}>Cohort</th><th style={{minWidth:35}}>Size</th>{allMonths.map(mk=><th key={mk} style={{textAlign:"center",minWidth:42,fontSize:9}}>{monthLabel(mk)}</th>)}</tr></thead>
+          <tbody>{activeMR.map((c,i)=>(<tr key={i} style={{borderBottom:"1px solid "+bdr+"15"}}><td style={{color:tx,fontWeight:600,fontSize:10}}>{c.l}</td><td style={{color:cy,fontSize:10}}>{c.sz}</td>{allMonths.map(mk=>{const v=c.retention[mk];if(v===undefined)return<td key={mk}/>;const isFirst=mk===c.mk;const heat=v>=80?gn:v>=60?am:v>=40?og:v>=20?rd:dm;return<td key={mk} style={{textAlign:"center",background:isFirst?bl+"25":heat+"18",borderRadius:2,padding:"3px 1px"}}><span style={{color:isFirst?bl:heat,fontWeight:isFirst?700:600,fontSize:10}}>{v}%</span></td>})}</tr>))}</tbody>
+        </table></div>
+        <div style={{display:"flex",gap:10,marginTop:8,fontSize:10}}><span><span style={{color:gn}}>{"\u25A0"}</span> 80%+</span><span><span style={{color:am}}>{"\u25A0"}</span> 60-79%</span><span><span style={{color:og}}>{"\u25A0"}</span> 40-59%</span><span><span style={{color:rd}}>{"\u25A0"}</span> 20-39%</span><span><span style={{color:dm}}>{"\u25A0"}</span> &lt;20%</span></div>
+      </Crd>
+      <Crd title="Booking Depth"><div style={{overflowX:"auto"}}><table><thead><tr style={{borderBottom:"1px solid "+bdr}}>{["Cohort","Size","2+","3+","5+","Net Rev","ARPU","Days to 2nd"].map(h=><th key={h} style={{whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead><tbody>{active.map((c,i)=>{const p2=spct(c.g2,c.sz),p3=spct(c.g3,c.sz),p5=spct(c.g5,c.sz);return(<tr key={i} style={{borderBottom:"1px solid "+bdr+"15"}}><td style={{color:tx,fontWeight:500}}>{c.l}</td><td style={{color:cy}}>{c.sz}</td><td style={{color:p2>=80?gn:p2>=60?am:rd}}>{p2}%</td><td style={{color:p3>=60?gn:p3>=40?am:rd}}>{p3}%</td><td style={{color:dm}}>{p5}%</td><td style={{color:gn}}>{fmt(c.net)}</td><td style={{color:am}}>{fmt(c.arpu)}</td><td style={{color:c.ttr&&c.ttr<=14?gn:am}}>{c.ttr?c.ttr+"d":"-"}</td></tr>)})}</tbody></table></div></Crd>
+      <Crd title="Repeat Curves - % Reaching 2nd Booking"><ResponsiveContainer width="100%" height={280}><LineChart data={active.map(c=>({month:c.l,D30:spct(c.d30,c.sz),D60:spct(c.d60,c.sz),D90:spct(c.d90,c.sz),D180:spct(c.d180,c.sz)}))}><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}} domain={[0,100]} tickFormatter={v=>v+"%"}/><Tooltip content={<CTip/>}/><Legend wrapperStyle={{fontSize:11}}/><Line type="monotone" dataKey="D30" stroke={gn} strokeWidth={2.5} name="By 30d" dot={{r:3}}/><Line type="monotone" dataKey="D60" stroke={bl} strokeWidth={2.5} name="By 60d" dot={{r:3}}/><Line type="monotone" dataKey="D90" stroke={am} strokeWidth={2.5} name="By 90d" dot={{r:3}}/><Line type="monotone" dataKey="D180" stroke={pu} strokeWidth={2.5} name="By 180d" dot={{r:3}}/></LineChart></ResponsiveContainer></Crd>
       <Crd title="Cohort Summary"><div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4}}>{active.map(c=>(<div key={c.l} style={{background:crd2,borderRadius:8,padding:10,textAlign:"center",minWidth:95,flex:"0 0 auto"}}><div style={{fontSize:12,fontWeight:700,color:am}}>{c.l}</div><div style={{fontSize:10,color:dm,marginTop:2}}>{c.sz} new</div><div style={{fontSize:15,fontWeight:700,color:tx,marginTop:4}}>{spct(c.g2,c.sz)}%</div><div style={{fontSize:9,color:dm}}>repeated</div><div style={{fontSize:11,color:gn,marginTop:4}}>{fmt(c.arpu)}</div><div style={{fontSize:9,color:dm}}>ARPU</div></div>))}</div></Crd>
     </>}
     {view==="quarterly"&&<>
       <Crd title="Quarterly Cohort Retention Heatmap">
-        <div style={{fontSize:10,color:dm,marginBottom:8}}>% of each cohort that returned in subsequent quarters</div>
+        <div style={{fontSize:10,color:dm,marginBottom:8}}>% of each cohort active in subsequent quarters</div>
         <div style={{overflowX:"auto"}}><table>
           <thead><tr style={{borderBottom:"1px solid "+bdr}}><th style={{minWidth:70}}>Cohort</th><th style={{minWidth:40}}>Size</th>{allQtrs.map(q=><th key={q} style={{textAlign:"center",minWidth:55,fontSize:10}}>{qtrLabel(q)}</th>)}</tr></thead>
           <tbody>{activeQ.map((c,i)=>(<tr key={i} style={{borderBottom:"1px solid "+bdr+"15"}}><td style={{color:tx,fontWeight:600}}>{c.ql}</td><td style={{color:cy}}>{c.sz}</td>{allQtrs.map(q=>{const v=c.retention[q];if(v===undefined)return<td key={q}/>;const isFirst=q===c.q;const heat=v>=80?gn:v>=60?am:v>=40?og:v>=20?rd:dm;return<td key={q} style={{textAlign:"center",background:isFirst?bl+"25":heat+"18",borderRadius:3,padding:"4px 2px"}}><span style={{color:isFirst?bl:heat,fontWeight:isFirst?700:600,fontSize:12}}>{v}%</span></td>})}</tr>))}</tbody>
         </table></div>
         <div style={{display:"flex",gap:10,marginTop:8,fontSize:10}}><span><span style={{color:gn}}>{"\u25A0"}</span> 80%+</span><span><span style={{color:am}}>{"\u25A0"}</span> 60-79%</span><span><span style={{color:og}}>{"\u25A0"}</span> 40-59%</span><span><span style={{color:rd}}>{"\u25A0"}</span> 20-39%</span><span><span style={{color:dm}}>{"\u25A0"}</span> &lt;20%</span></div>
       </Crd>
-      <Crd title="Quarterly New Customer Intake">
-        <ResponsiveContainer width="100%" height={260}><BarChart data={activeQ.map(c=>({quarter:c.ql,Size:c.sz}))}><CartesianGrid strokeDasharray="3 3" stroke={bdr}/><XAxis dataKey="quarter" tick={{fill:dm,fontSize:10}}/><YAxis tick={{fill:dm,fontSize:10}}/><Tooltip content={<CTip/>}/><Bar dataKey="Size" name="New Customers" fill={am} radius={[4,4,0,0]}/></BarChart></ResponsiveContainer>
-      </Crd>
+      <Crd title="Quarterly Booking Depth"><div style={{overflowX:"auto"}}><table><thead><tr style={{borderBottom:"1px solid "+bdr}}>{["Cohort","Size","2+","3+","5+","Net Rev","ARPU","Days to 2nd"].map(h=><th key={h} style={{whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead><tbody>{activeQ.map((c,i)=>{const p2=spct(c.g2,c.sz),p3=spct(c.g3,c.sz),p5=spct(c.g5,c.sz);return(<tr key={i} style={{borderBottom:"1px solid "+bdr+"15"}}><td style={{color:tx,fontWeight:500}}>{c.ql}</td><td style={{color:cy}}>{c.sz}</td><td style={{color:p2>=80?gn:p2>=60?am:rd}}>{p2}%</td><td style={{color:p3>=60?gn:p3>=40?am:rd}}>{p3}%</td><td style={{color:dm}}>{p5}%</td><td style={{color:gn}}>{fmt(c.net)}</td><td style={{color:am}}>{fmt(c.arpu)}</td><td style={{color:c.ttr&&c.ttr<=14?gn:am}}>{c.ttr?c.ttr+"d":"-"}</td></tr>)})}</tbody></table></div></Crd>
+      <Crd title="Quarterly Cohort Summary"><div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4}}>{activeQ.map(c=>(<div key={c.ql} style={{background:crd2,borderRadius:8,padding:10,textAlign:"center",minWidth:100,flex:"0 0 auto"}}><div style={{fontSize:12,fontWeight:700,color:am}}>{c.ql}</div><div style={{fontSize:10,color:dm,marginTop:2}}>{c.sz} new</div><div style={{fontSize:15,fontWeight:700,color:tx,marginTop:4}}>{spct(c.g2,c.sz)}%</div><div style={{fontSize:9,color:dm}}>repeated</div><div style={{fontSize:11,color:gn,marginTop:4}}>{fmt(c.arpu)}</div><div style={{fontSize:9,color:dm}}>ARPU</div></div>))}</div></Crd>
     </>}
   </div>);
 };
 
-// ═══ TAB 4: SUBSCRIPTIONS + SUB VS PPU ═══
-const Tab4=({data,subKpis,plans,ud,subStats,ppuStats,subVsPpu})=>{
+// ═══ TAB 4: SUBSCRIPTIONS ═══
+const Tab4=({data,subKpis,ud,subStats,ppuStats})=>{
   if(!data.length)return<div style={{color:dm,padding:20}}>No data</div>;
   let subN=0,totN=0;for(const d of data){subN+=d.sb;totN+=d.n}
   const share=spct(subN,totN),last=data[data.length-1],lastShare=spct(last.sb,last.n);
-  const maxP=plans.length>0?Math.max(...plans.map(p=>p.n)):1;
   return(<div style={{display:"flex",flexDirection:"column",gap:14}}>
     <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-      <KPI label="Subscribers" value={subKpis.totalSubs} color={pu} sub={subKpis.penetration+"% penetration"}/><KPI label="Sub Revenue" value={fmt(subN)} color={gn} sub={share+"% of total"}/><KPI label="Avg Sub Value" value={fmt(subKpis.avgSubValue)} color={am}/><KPI label="Visits/Sub" value={subKpis.avgVisitsPerSub} color={cy}/><KPI label="Cost/Sub Visit" value={fmt(subKpis.avgEffPrice)} color={bl} sub="effective"/><KPI label={last.l+" Share"} value={lastShare+"%"} color={pu} sub="sub revenue"/>
+      <KPI label="Subscribers" value={subKpis.totalSubs} color={pu} sub={subKpis.penetration+"% penetration"}/>
+      <KPI label="Sub Revenue" value={fmt(subN)} color={gn} sub={share+"% of total"}/>
+      <KPI label="Avg Sub Value" value={fmt(subKpis.avgSubValue)} color={am}/>
+      <KPI label={last.l+" Share"} value={lastShare+"%"} color={pu} sub="sub revenue"/>
     </div>
     <Crd title="Subscriber vs Pay-Per-Use Comparison">
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
@@ -317,7 +413,7 @@ const Tab4=({data,subKpis,plans,ud,subStats,ppuStats,subVsPpu})=>{
           <div style={{fontSize:13,fontWeight:700,color:pu,marginBottom:8}}>Subscribers ({subStats.count})</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
             <div><div style={{fontSize:10,color:dm}}>Avg Revenue</div><div style={{fontSize:16,fontWeight:700,color:tx}}>{fmt(subStats.avgRev)}</div></div>
-            <div><div style={{fontSize:10,color:dm}}>Avg Visits</div><div style={{fontSize:16,fontWeight:700,color:tx}}>{subStats.avgVisits}</div></div>
+            <div><div style={{fontSize:10,color:dm}}>Avg Bookings</div><div style={{fontSize:16,fontWeight:700,color:tx}}>{subStats.avgBk}</div></div>
             <div><div style={{fontSize:10,color:dm}}>Total Revenue</div><div style={{fontSize:16,fontWeight:700,color:gn}}>{fmt(subStats.totRev)}</div></div>
             <div><div style={{fontSize:10,color:dm}}>Active (90d)</div><div style={{fontSize:16,fontWeight:700,color:gn}}>{subStats.retPct}%</div></div>
           </div>
@@ -326,7 +422,7 @@ const Tab4=({data,subKpis,plans,ud,subStats,ppuStats,subVsPpu})=>{
           <div style={{fontSize:13,fontWeight:700,color:og,marginBottom:8}}>Pay-Per-Use ({ppuStats.count})</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
             <div><div style={{fontSize:10,color:dm}}>Avg Revenue</div><div style={{fontSize:16,fontWeight:700,color:tx}}>{fmt(ppuStats.avgRev)}</div></div>
-            <div><div style={{fontSize:10,color:dm}}>Avg Visits</div><div style={{fontSize:16,fontWeight:700,color:tx}}>{ppuStats.avgVisits}</div></div>
+            <div><div style={{fontSize:10,color:dm}}>Avg Bookings</div><div style={{fontSize:16,fontWeight:700,color:tx}}>{ppuStats.avgBk}</div></div>
             <div><div style={{fontSize:10,color:dm}}>Total Revenue</div><div style={{fontSize:16,fontWeight:700,color:gn}}>{fmt(ppuStats.totRev)}</div></div>
             <div><div style={{fontSize:10,color:dm}}>Active (90d)</div><div style={{fontSize:16,fontWeight:700,color:ppuStats.retPct>=50?gn:rd}}>{ppuStats.retPct}%</div></div>
           </div>
@@ -334,15 +430,14 @@ const Tab4=({data,subKpis,plans,ud,subStats,ppuStats,subVsPpu})=>{
       </div>
       {subStats.count>0&&ppuStats.count>0&&<div style={{marginTop:10,display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
         <div style={{background:crd2,borderRadius:6,padding:8,textAlign:"center"}}><div style={{fontSize:10,color:dm}}>Revenue Premium</div><div style={{fontSize:16,fontWeight:700,color:subStats.avgRev>ppuStats.avgRev?gn:rd}}>{ppuStats.avgRev>0?(subStats.avgRev/ppuStats.avgRev).toFixed(1):"—"}x</div></div>
-        <div style={{background:crd2,borderRadius:6,padding:8,textAlign:"center"}}><div style={{fontSize:10,color:dm}}>Visit Frequency</div><div style={{fontSize:16,fontWeight:700,color:subStats.avgVisits>ppuStats.avgVisits?gn:rd}}>{ppuStats.avgVisits>0?(subStats.avgVisits/ppuStats.avgVisits).toFixed(1):"—"}x</div></div>
+        <div style={{background:crd2,borderRadius:6,padding:8,textAlign:"center"}}><div style={{fontSize:10,color:dm}}>Booking Frequency</div><div style={{fontSize:16,fontWeight:700,color:subStats.avgBk>ppuStats.avgBk?gn:rd}}>{ppuStats.avgBk>0?(subStats.avgBk/ppuStats.avgBk).toFixed(1):"—"}x</div></div>
         <div style={{background:crd2,borderRadius:6,padding:8,textAlign:"center"}}><div style={{fontSize:10,color:dm}}>Retention Edge</div><div style={{fontSize:16,fontWeight:700,color:gn}}>+{(subStats.retPct-ppuStats.retPct).toFixed(0)}pp</div></div>
       </div>}
     </Crd>
     <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:12}}>
-      <Crd title="Subscription Revenue and Share of Total"><ResponsiveContainer width="100%" height={260}><ComposedChart data={data.map(d=>({month:d.l,SubRev:d.sb,Share:spct(d.sb,d.n)}))}><CartesianGrid strokeDasharray="3 3" stroke={bdr}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={data.length>14?2:0}/><YAxis yAxisId="l" tick={{fill:dm,fontSize:10}} tickFormatter={fmt}/><YAxis yAxisId="r" orientation="right" tick={{fill:dm,fontSize:10}} tickFormatter={v=>v+"%"} domain={[0,100]}/><Tooltip content={<CTip/>}/><Bar yAxisId="l" dataKey="SubRev" fill={pu} name="Sub Revenue" radius={[4,4,0,0]} opacity={0.8}/><Line yAxisId="r" type="monotone" dataKey="Share" stroke={gn} strokeWidth={2.5} name="% of Total" dot={{r:3,fill:gn}}/></ComposedChart></ResponsiveContainer></Crd>
+      <Crd title="Subscription Revenue and Share of Total"><ResponsiveContainer width="100%" height={260}><ComposedChart data={data.map(d=>({month:d.l,SubRev:d.sb,Share:spct(d.sb,d.n)}))}><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={data.length>14?2:0}/><YAxis yAxisId="l" tick={{fill:dm,fontSize:10}} tickFormatter={fmt}/><YAxis yAxisId="r" orientation="right" tick={{fill:dm,fontSize:10}} tickFormatter={v=>v+"%"} domain={[0,100]}/><Tooltip content={<CTip/>}/><Bar yAxisId="l" dataKey="SubRev" fill={pu} name="Sub Revenue" radius={[4,4,0,0]} opacity={0.85}/><Line yAxisId="r" type="monotone" dataKey="Share" stroke={gn} strokeWidth={3} name="% of Total" dot={{r:3,fill:gn}}/></ComposedChart></ResponsiveContainer></Crd>
       <Crd title="Subscription Profile"><div style={{display:"flex",flexDirection:"column",gap:14,padding:"8px 0"}}><div><div style={{fontSize:11,color:dm,marginBottom:5}}>Service Split</div><div style={{display:"flex",gap:6}}>{Object.entries(subKpis.subFor).map(([k,v])=>(<div key={k} style={{background:crd2,borderRadius:8,padding:"8px 14px",flex:1,textAlign:"center"}}><div style={{fontSize:18,fontWeight:700,color:tx}}>{v}</div><div style={{fontSize:10,color:dm}}>{k}</div></div>))}</div></div><div><div style={{fontSize:11,color:dm,marginBottom:5}}>Usage Distribution</div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5}}><div style={{background:crd2,borderRadius:6,padding:7,textAlign:"center"}}><div style={{fontSize:15,fontWeight:700,color:gn}}>{ud.high}</div><div style={{fontSize:9,color:dm}}>High (10+)</div></div><div style={{background:crd2,borderRadius:6,padding:7,textAlign:"center"}}><div style={{fontSize:15,fontWeight:700,color:bl}}>{ud.medium}</div><div style={{fontSize:9,color:dm}}>Med (5-9)</div></div><div style={{background:crd2,borderRadius:6,padding:7,textAlign:"center"}}><div style={{fontSize:15,fontWeight:700,color:am}}>{ud.low}</div><div style={{fontSize:9,color:dm}}>Low (1-4)</div></div><div style={{background:crd2,borderRadius:6,padding:7,textAlign:"center"}}><div style={{fontSize:15,fontWeight:700,color:rd}}>{ud.zero}</div><div style={{fontSize:9,color:dm}}>None</div></div></div></div></div></Crd>
     </div>
-    <Crd title="Plan Mix - Revenue by Type">{plans.map(p=><PBar key={p.t} label={p.t+" ("+p.c+")"} value={p.n} max={maxP} color={pu} sub={fmt(p.n)}/>)}</Crd>
   </div>);
 };
 
@@ -361,8 +456,36 @@ function Dashboard(){
     }).catch(e=>{setError(String(e.message||e));setLoading(false)})};
   useEffect(()=>{loadData()},[]);
 
-  const filtered=useMemo(()=>{if(!allData)return{monthly:[],cohorts:[]};const s=Math.min(si,ei),e=Math.max(si,ei);return{monthly:allData.monthly.slice(s,e+1),cohorts:allData.cohorts.slice(s,e+1)}},[allData,si,ei]);
+  const filtered=useMemo(()=>{if(!allData)return{monthly:[],cohorts:[],monthlyRetention:[]};const s=Math.min(si,ei),e=Math.max(si,ei);return{monthly:allData.monthly.slice(s,e+1),cohorts:allData.cohorts.slice(s,e+1),monthlyRetention:allData.monthlyRetention.slice(s,e+1)}},[allData,si,ei]);
   const dedupUc=useMemo(()=>{if(!filtered.monthly.length)return 0;const ids=new Set();for(const m of filtered.monthly){for(const id of(m.ids||[]))ids.add(id)}return ids.size},[filtered.monthly]);
+
+  // Migration based on last 2 months in filtered range
+  const migrationInfo=useMemo(()=>{
+    if(!allData||filtered.monthly.length<2)return{migration:[],label:""};
+    const fMonths=filtered.monthly;
+    const fromMk=fMonths[fMonths.length-2].mk;const toMk=fMonths[fMonths.length-1].mk;
+    return{migration:allData.buildMigration(fromMk,toMk),label:monthLabel(fromMk)+" \u2192 "+monthLabel(toMk)};
+  },[allData,filtered.monthly]);
+
+  // Sub vs PPU based on filtered range
+  const filteredSubPpu=useMemo(()=>{
+    if(!allData||!filtered.monthly.length)return{subStats:{count:0,totRev:0,avgRev:0,avgBk:0,retPct:0},ppuStats:{count:0,totRev:0,avgRev:0,avgBk:0,retPct:0}};
+    const mks=new Set(filtered.monthly.map(m=>m.mk));
+    const fRecs=allData.records.filter(r=>mks.has(r.mk));
+    const fBookings=allData.bookings.filter(r=>mks.has(r.mk));
+    // IDs active in range
+    const subIdsInRange=new Set();const ppuIdsInRange=new Set();
+    for(const r of fBookings){
+      if(allData.allSubIds.has(r.id))subIdsInRange.add(r.id);else ppuIdsInRange.add(r.id);
+    }
+    function stats(ids){
+      const n=ids.size;if(!n)return{count:0,totRev:0,avgRev:0,avgBk:0,retPct:0};
+      let totRev=0,totBk=0,active=0;const now=new Date();
+      for(const id of ids){totRev+=fRecs.filter(r=>r.id===id).reduce((a,r)=>a+r.net,0);totBk+=fBookings.filter(r=>r.id===id).length;if(allData.lastBooking[id]&&(now-allData.lastBooking[id])/864e5<90)active++}
+      return{count:n,totRev:Math.round(totRev),avgRev:Math.round(totRev/n),avgBk:+(totBk/n).toFixed(1),retPct:spct(active,n)};
+    }
+    return{subStats:stats(subIdsInRange),ppuStats:stats(ppuIdsInRange)};
+  },[allData,filtered.monthly]);
 
   if(loading)return(<div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh"}}><div style={{textAlign:"center"}}><div style={{fontSize:40,marginBottom:16}}>{"\uD83D\uDC15"}</div><div style={{fontSize:18,color:tx,fontWeight:600}}>Loading Awwzo Data...</div><div style={{fontSize:12,color:dm,marginTop:8}}>Fetching live data from Google Sheets</div></div></div>);
   if(error)return(<div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh"}}><div style={{textAlign:"center",color:rd}}><div style={{fontSize:18,fontWeight:600}}>Error loading data</div><div style={{fontSize:12,color:dm,marginTop:8,maxWidth:400,wordBreak:"break-all"}}>{error}</div><button onClick={loadData} style={{marginTop:16,background:am+"18",color:am,border:"1px solid "+am+"30",borderRadius:6,padding:"8px 20px",fontSize:13}}>Retry</button></div></div>);
@@ -381,9 +504,9 @@ function Dashboard(){
     </div>
     <div style={{display:"flex",gap:4,marginBottom:14,background:crd,border:"1px solid "+bdr,borderRadius:8,padding:3,width:"fit-content"}}>{TABS.map(t=>(<button key={t.id} onClick={()=>setTab(t.id)} style={{background:tab===t.id?am+"15":"transparent",color:tab===t.id?am:dm,border:"1px solid "+(tab===t.id?am+"30":"transparent"),borderRadius:6,padding:"6px 12px",fontSize:12,fontWeight:tab===t.id?600:400,whiteSpace:"nowrap"}}>{t.icon} {t.label}</button>))}</div>
     {tab==="overview"&&<Tab1 data={filtered.monthly} dedupUc={dedupUc} momData={allData.momData}/>}
-    {tab==="customers"&&<Tab2 lifecycle={allData.lifecycle} rfmData={allData.rfmData} spenderList={allData.spenderList} migration={allData.migration} migrationMonths={allData.migrationMonths}/>}
-    {tab==="retention"&&<Tab3 cohorts={filtered.cohorts} qtrlyCohorts={allData.qtrlyCohorts} allQtrs={allData.allQtrs}/>}
-    {tab==="subscriptions"&&<Tab4 data={filtered.monthly} subKpis={allData.subKpis} plans={allData.plans} ud={allData.ud} subStats={allData.subStats} ppuStats={allData.ppuStats} subVsPpu={allData.subVsPpu}/>}
+    {tab==="customers"&&<Tab2 lifecycle={allData.lifecycle} rfmData={allData.rfmData} customerList={allData.customerList} migration={migrationInfo.migration} migLabel={migrationInfo.label}/>}
+    {tab==="retention"&&<Tab3 cohorts={filtered.cohorts} monthlyRetention={filtered.monthlyRetention} allMonths={allData.allMonths} qtrlyCohorts={allData.qtrlyCohorts} allQtrs={allData.allQtrs}/>}
+    {tab==="subscriptions"&&<Tab4 data={filtered.monthly} subKpis={allData.subKpis} ud={allData.ud} subStats={filteredSubPpu.subStats} ppuStats={filteredSubPpu.ppuStats}/>}
   </div>);
 }
 ReactDOM.render(<Dashboard/>,document.getElementById("root"));
