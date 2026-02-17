@@ -234,6 +234,15 @@ function computeAll(records,subMeta){
   const ud={high:0,medium:0,low:0,zero:0};
   for(const sid of allSubIds){const sv=bookings.filter(r=>r.id===sid&&r.stay==="subscription").length;if(sv>=10)ud.high++;else if(sv>=5)ud.medium++;else if(sv>=1)ud.low++;else ud.zero++}
 
+  // Avg monthly ARPU: for each customer, their total spend / months active (first to last booking)
+  let mArpuSum=0,mArpuCount=0;
+  for(const id of allCustomers){
+    const fb=firstBooking[id];const lb=lastBooking[id];if(!fb||!lb)continue;
+    const months=Math.max(1,Math.round((lb-fb)/2592e6)+1);// ~30 days per month
+    mArpuSum+=(totalSpend[id]||0)/months;mArpuCount++;
+  }
+  const monthlyArpu=mArpuCount>0?Math.round(mArpuSum/mArpuCount):0;
+
   // Exec summary metrics
   const totalCustomers=allCustomers.length;
   const repeatCustomers=allCustomers.filter(id=>(bookingCounts[id]||0)>=2).length;
@@ -244,18 +253,46 @@ function computeAll(records,subMeta){
   const top10Count=Math.max(1,Math.ceil(totalCustomers*0.1));
   const top10Rev=allSpends.slice(0,top10Count).reduce((a,v)=>a+v,0);
   const top10Pct=spct(top10Rev,totalRev);
-  // Active base for churn rate
   const activeCount=allCustomers.filter(id=>{const lb=lastBooking[id];return lb&&(now-lb)/864e5<90}).length;
   const latestChurn=churnByMonth.length>1?churnByMonth[churnByMonth.length-1]:null;
   const churnRatePct=latestChurn&&activeCount>0?spct(latestChurn.churned,activeCount+latestChurn.churned):0;
-  // Avg ttr across all
   const allTtr=Object.values(ttrDays);
   const avgTtr=allTtr.length>0?+(allTtr.reduce((a,v)=>a+v,0)/allTtr.length).toFixed(1):null;
+
+  // Tier functions
+  function avgTopN(arr,pct){const n=Math.max(1,Math.ceil(arr.length*pct/100));return arr.length>0?Math.round(arr.slice(0,n).reduce((a,v)=>a+v,0)/n):0}
+  const tiers=[10,20,30,40,50];
+
+  // LTV tiers (all-time, sorted desc)
+  const ltvTiers={all:avgLtv};
+  for(const t of tiers)ltvTiers["top"+t]=avgTopN(allSpends,t);
+
+  // Last 12 completed months
+  const nowMk=monthKey(now);const curMo=parseInt(nowMk.split("-")[1]);const curYr=parseInt(nowMk.split("-")[0]);
+  // Go back 12 completed months from the month before current
+  const l12Months=[];
+  for(let i=1;i<=12;i++){let m=curMo-i;let y=curYr;while(m<=0){m+=12;y--}l12Months.push(y+"-"+String(m).padStart(2,"0"))}
+  const l12Set=new Set(l12Months);
+  const l12Bookings=bookings.filter(r=>l12Set.has(r.mk));
+
+  // Residency per pet L12M
+  const resL12={};
+  for(const r of l12Bookings){if(!resL12[r.id])resL12[r.id]=0;if(r.service==="Boarding")resL12[r.id]+=(r.overnights||1);else resL12[r.id]+=1}
+  const resVals=Object.values(resL12).sort((a,b)=>b-a);
+  const resTiers={all:resVals.length>0?+(resVals.reduce((a,v)=>a+v,0)/resVals.length).toFixed(1):0};
+  for(const t of tiers)resTiers["top"+t]=resVals.length>0?+(avgTopN(resVals,t)).toFixed(1):0;
+
+  // Bookings per pet L12M
+  const bkL12={};
+  for(const r of l12Bookings){bkL12[r.id]=(bkL12[r.id]||0)+1}
+  const bkVals=Object.values(bkL12).sort((a,b)=>b-a);
+  const bkTiers={all:bkVals.length>0?+(bkVals.reduce((a,v)=>a+v,0)/bkVals.length).toFixed(1):0};
+  for(const t of tiers)bkTiers["top"+t]=bkVals.length>0?+(avgTopN(bkVals,t)).toFixed(1):0;
 
   return{monthly,cohorts,monthlyRetention,allMonths,lifecycle,rfmData,customerList,churnByMonth,
     qtrlyCohorts,allQtrs,momData,buildMigration,seasonData,years,avgPpuBeforeSub,
     records,bookings,allSubIds,allCustomers,firstBooking,lastBooking,bookingCounts,totalSpend,residency,
-    execMetrics:{repeatRate,avgLtv,top10Pct,churnRatePct,avgTtr,totalCustomers,activeCount},
+    execMetrics:{repeatRate,avgLtv,top10Pct,churnRatePct,avgTtr,totalCustomers,activeCount,monthlyArpu,ltvTiers,resTiers,bkTiers,l12Label:l12Months.length>0?monthLabel(l12Months[l12Months.length-1])+" → "+monthLabel(l12Months[0]):""},
     subKpis:{totalSubs:allSubIds.size,penetration:spct(allSubIds.size,allCustomers.length),totalNet:Math.round(subBillingNet),avgSubValue:sdiv(subBillingNet,allSubIds.size),subFor:subForMap},ud};
 }
 
@@ -290,7 +327,6 @@ const Tab0=({data,dedupUc,momData,execMetrics,subKpis,subStats,ppuStats,avgPpuBe
   const revPerBk=sdiv(totN,totBk);
   const arpu=sdiv(totN,dedupUc);
   const subShare=totN>0?spct(data.reduce((a,d)=>a+d.sb,0),totN):0;
-  const ltvArpu=arpu>0?+(execMetrics.avgLtv/arpu).toFixed(1):0;
   const intv=data.length>14?2:0;
   // Mini sparkline data for revenue
   const sparkData=data.map(d=>({l:d.l,v:d.n}));
@@ -337,10 +373,28 @@ const Tab0=({data,dedupUc,momData,execMetrics,subKpis,subStats,ppuStats,avgPpuBe
 
     {/* Section: Customer Quality */}
     <div style={{fontSize:11,color:am,fontWeight:600,textTransform:"uppercase",letterSpacing:1}}>Customer Quality</div>
-    <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-      <BigKPI label="Avg Customer LTV" value={fmt(execMetrics.avgLtv)} sub="lifetime value" color={gn}/>
-      <BigKPI label="LTV / ARPU" value={ltvArpu+"x"} sub="customer longevity indicator" color={bl}/>
-      <BigKPI label="Top 10% Revenue Share" value={execMetrics.top10Pct+"%"} sub="revenue concentration" color={execMetrics.top10Pct>70?rd:execMetrics.top10Pct>50?am:gn}/>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12}}>
+      <Crd title="LTV — All Time">
+        <table><thead><tr style={{borderBottom:"1px solid "+bdr}}><th>Segment</th><th style={{textAlign:"right"}}>Avg LTV</th></tr></thead>
+        <tbody>
+          <tr style={{borderBottom:"1px solid "+bdr+"15"}}><td style={{color:tx,fontWeight:600}}>All Customers</td><td style={{textAlign:"right",color:gn,fontWeight:700,fontSize:14}}>{fmt(execMetrics.ltvTiers.all)}</td></tr>
+          {[10,20,30,40,50].map(t=>(<tr key={t} style={{borderBottom:"1px solid "+bdr+"15"}}><td style={{color:am}}>Top {t}%</td><td style={{textAlign:"right",color:tx,fontWeight:600}}>{fmt(execMetrics.ltvTiers["top"+t])}</td></tr>))}
+        </tbody></table>
+      </Crd>
+      <Crd title={<span>Avg Residency / Pet<span style={{fontSize:9,color:dm,marginLeft:6}}>L12M: {execMetrics.l12Label}</span></span>}>
+        <table><thead><tr style={{borderBottom:"1px solid "+bdr}}><th>Segment</th><th style={{textAlign:"right"}}>Avg Days</th></tr></thead>
+        <tbody>
+          <tr style={{borderBottom:"1px solid "+bdr+"15"}}><td style={{color:tx,fontWeight:600}}>All Customers</td><td style={{textAlign:"right",color:bl,fontWeight:700,fontSize:14}}>{execMetrics.resTiers.all}</td></tr>
+          {[10,20,30,40,50].map(t=>(<tr key={t} style={{borderBottom:"1px solid "+bdr+"15"}}><td style={{color:am}}>Top {t}%</td><td style={{textAlign:"right",color:tx,fontWeight:600}}>{execMetrics.resTiers["top"+t]}</td></tr>))}
+        </tbody></table>
+      </Crd>
+      <Crd title={<span>Avg Bookings / Pet<span style={{fontSize:9,color:dm,marginLeft:6}}>L12M: {execMetrics.l12Label}</span></span>}>
+        <table><thead><tr style={{borderBottom:"1px solid "+bdr}}><th>Segment</th><th style={{textAlign:"right"}}>Avg Bookings</th></tr></thead>
+        <tbody>
+          <tr style={{borderBottom:"1px solid "+bdr+"15"}}><td style={{color:tx,fontWeight:600}}>All Customers</td><td style={{textAlign:"right",color:cy,fontWeight:700,fontSize:14}}>{execMetrics.bkTiers.all}</td></tr>
+          {[10,20,30,40,50].map(t=>(<tr key={t} style={{borderBottom:"1px solid "+bdr+"15"}}><td style={{color:am}}>Top {t}%</td><td style={{textAlign:"right",color:tx,fontWeight:600}}>{execMetrics.bkTiers["top"+t]}</td></tr>))}
+        </tbody></table>
+      </Crd>
     </div>
   </div>);
 };
