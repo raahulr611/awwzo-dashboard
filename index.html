@@ -234,9 +234,28 @@ function computeAll(records,subMeta){
   const ud={high:0,medium:0,low:0,zero:0};
   for(const sid of allSubIds){const sv=bookings.filter(r=>r.id===sid&&r.stay==="subscription").length;if(sv>=10)ud.high++;else if(sv>=5)ud.medium++;else if(sv>=1)ud.low++;else ud.zero++}
 
+  // Exec summary metrics
+  const totalCustomers=allCustomers.length;
+  const repeatCustomers=allCustomers.filter(id=>(bookingCounts[id]||0)>=2).length;
+  const repeatRate=spct(repeatCustomers,totalCustomers);
+  const allSpends=allCustomers.map(id=>totalSpend[id]||0).sort((a,b)=>b-a);
+  const totalRev=allSpends.reduce((a,v)=>a+v,0);
+  const avgLtv=totalCustomers>0?Math.round(totalRev/totalCustomers):0;
+  const top10Count=Math.max(1,Math.ceil(totalCustomers*0.1));
+  const top10Rev=allSpends.slice(0,top10Count).reduce((a,v)=>a+v,0);
+  const top10Pct=spct(top10Rev,totalRev);
+  // Active base for churn rate
+  const activeCount=allCustomers.filter(id=>{const lb=lastBooking[id];return lb&&(now-lb)/864e5<90}).length;
+  const latestChurn=churnByMonth.length>1?churnByMonth[churnByMonth.length-1]:null;
+  const churnRatePct=latestChurn&&activeCount>0?spct(latestChurn.churned,activeCount+latestChurn.churned):0;
+  // Avg ttr across all
+  const allTtr=Object.values(ttrDays);
+  const avgTtr=allTtr.length>0?+(allTtr.reduce((a,v)=>a+v,0)/allTtr.length).toFixed(1):null;
+
   return{monthly,cohorts,monthlyRetention,allMonths,lifecycle,rfmData,customerList,churnByMonth,
     qtrlyCohorts,allQtrs,momData,buildMigration,seasonData,years,avgPpuBeforeSub,
     records,bookings,allSubIds,allCustomers,firstBooking,lastBooking,bookingCounts,totalSpend,residency,
+    execMetrics:{repeatRate,avgLtv,top10Pct,churnRatePct,avgTtr,totalCustomers,activeCount},
     subKpis:{totalSubs:allSubIds.size,penetration:spct(allSubIds.size,allCustomers.length),totalNet:Math.round(subBillingNet),avgSubValue:sdiv(subBillingNet,allSubIds.size),subFor:subForMap},ud};
 }
 
@@ -254,6 +273,77 @@ const KPI=({label,value,sub,color})=>(<div style={{background:crd,border:"1px so
 const Crd=({title,children})=>(<div style={{background:crd,border:"1px solid "+bdr,borderRadius:10,padding:"14px 16px"}}>{title&&<div style={{fontSize:13,fontWeight:600,color:tx,marginBottom:10}}>{typeof title==="string"?title:title}</div>}{children}</div>);
 const ChgBadge=({v})=>{if(v===null||v===undefined)return<span style={{color:dm}}>—</span>;const c=v>0?gn:v<0?rd:dm;return<span style={{color:c,fontWeight:600}}>{v>0?"+":""}{v}%</span>};
 const PhBadge=({p})=>(<span style={{color:phCol[p]||dm,fontSize:10,background:(phCol[p]||dm)+"18",padding:"2px 8px",borderRadius:4}}>{p}</span>);
+
+// ═══ TAB 0: EXECUTIVE SUMMARY ═══
+const BigKPI=({label,value,sub,color,trend})=>(<div style={{background:crd,border:"1px solid "+bdr,borderRadius:12,padding:"18px 20px",flex:"1 1 200px",minWidth:180}}>
+  <div style={{fontSize:10,color:dm,letterSpacing:0.5,marginBottom:6,textTransform:"uppercase"}}>{label}</div>
+  <div style={{display:"flex",alignItems:"baseline",gap:8}}><div style={{fontSize:28,fontWeight:700,color:tx}}>{value}</div>{trend!==null&&trend!==undefined&&<ChgBadge v={trend}/>}</div>
+  {sub&&<div style={{fontSize:11,color:color||am,marginTop:4,fontWeight:500}}>{sub}</div>}
+</div>);
+
+const Tab0=({data,dedupUc,momData,execMetrics,subKpis,subStats,ppuStats,avgPpuBeforeSub})=>{
+  if(!data.length)return<div style={{color:dm,padding:20}}>No data</div>;
+  let totN=0,totBk=0,totNc=0;for(const d of data){totN+=d.n;totBk+=d.bk;totNc+=d.nc}
+  const last=data[data.length-1];const prev=data.length>1?data[data.length-2]:null;
+  const revMoM=prev?pctChg(last.n,prev.n):null;
+  const bkMoM=prev?pctChg(last.bk,prev.bk):null;
+  const revPerBk=sdiv(totN,totBk);
+  const arpu=sdiv(totN,dedupUc);
+  const subShare=totN>0?spct(data.reduce((a,d)=>a+d.sb,0),totN):0;
+  const ltvArpu=arpu>0?+(execMetrics.avgLtv/arpu).toFixed(1):0;
+  const intv=data.length>14?2:0;
+  // Mini sparkline data for revenue
+  const sparkData=data.map(d=>({l:d.l,v:d.n}));
+
+  return(<div style={{display:"flex",flexDirection:"column",gap:16}}>
+    {/* Section: Revenue & Unit Economics */}
+    <div style={{fontSize:11,color:am,fontWeight:600,textTransform:"uppercase",letterSpacing:1}}>Revenue & Unit Economics</div>
+    <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+      <BigKPI label="Total Net Revenue" value={fmt(totN)} sub={data[0]?.l+" → "+last.l} color={gn}/>
+      <BigKPI label={last.l+" Revenue"} value={fmt(last.n)} trend={revMoM} sub="vs previous month" color={revMoM>=0?gn:rd}/>
+      <BigKPI label="ARR" value={fmt(last.n*12)} sub="annualized from latest month" color={bl}/>
+      <BigKPI label="Revenue / Booking" value={fmt(revPerBk)} sub="avg ticket size" color={pk}/>
+      <BigKPI label="ARPU" value={fmt(arpu)} sub={dedupUc+" unique customers"} color={pu}/>
+    </div>
+
+    {/* Revenue trend mini chart */}
+    <Crd title="Revenue Trend"><ResponsiveContainer width="100%" height={180}><AreaChart data={sparkData}><defs><linearGradient id="rGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={gn} stopOpacity={0.3}/><stop offset="95%" stopColor={gn} stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="l" tick={{fill:dm,fontSize:9}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}} tickFormatter={fmt}/><Tooltip content={<CTip/>}/><Area type="monotone" dataKey="v" stroke={gn} strokeWidth={2.5} fill="url(#rGrad)" name="Net Revenue"/></AreaChart></ResponsiveContainer></Crd>
+
+    {/* Section: Growth */}
+    <div style={{fontSize:11,color:am,fontWeight:600,textTransform:"uppercase",letterSpacing:1}}>Growth</div>
+    <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+      <BigKPI label="Revenue MoM" value={(revMoM!==null?(revMoM>0?"+":"")+revMoM+"%":"—")} color={revMoM>=0?gn:rd}/>
+      <BigKPI label="Booking MoM" value={(bkMoM!==null?(bkMoM>0?"+":"")+bkMoM+"%":"—")} color={bkMoM>=0?gn:rd} sub={last.bk+" bookings in "+last.l}/>
+      <BigKPI label="New Customers" value={last.nc} sub={last.l} color={cy} trend={prev?pctChg(last.nc,prev.nc):null}/>
+      <BigKPI label="Revenue Mix" value={subShare+"%"} sub="subscription share" color={pu}/>
+    </div>
+
+    {/* Section: Retention & Stickiness */}
+    <div style={{fontSize:11,color:am,fontWeight:600,textTransform:"uppercase",letterSpacing:1}}>Retention & Stickiness</div>
+    <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+      <BigKPI label="90-Day Active Rate" value={spct(execMetrics.activeCount,execMetrics.totalCustomers)+"%"} sub={execMetrics.activeCount+" of "+execMetrics.totalCustomers+" customers"} color={gn}/>
+      <BigKPI label="Repeat Rate" value={execMetrics.repeatRate+"%"} sub="customers with 2+ bookings" color={bl}/>
+      <BigKPI label="Days to 2nd Booking" value={execMetrics.avgTtr?execMetrics.avgTtr+"d":"—"} sub="avg across all cohorts" color={execMetrics.avgTtr&&execMetrics.avgTtr<=14?gn:am}/>
+      <BigKPI label="Churn Rate" value={execMetrics.churnRatePct+"%"} sub="newly churned / active base" color={execMetrics.churnRatePct<=5?gn:execMetrics.churnRatePct<=15?am:rd}/>
+    </div>
+
+    {/* Section: Subscription Health */}
+    <div style={{fontSize:11,color:am,fontWeight:600,textTransform:"uppercase",letterSpacing:1}}>Subscription Health</div>
+    <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+      <BigKPI label="Subscriber Penetration" value={subKpis.penetration+"%"} sub={subKpis.totalSubs+" subscribers"} color={pu}/>
+      <BigKPI label="Subscriber Revenue Premium" value={ppuStats.avgRev>0?(subStats.avgRev/ppuStats.avgRev).toFixed(1)+"x":"—"} sub="vs PPU customers" color={gn}/>
+      <BigKPI label="Avg PPU Before Sub" value={avgPpuBeforeSub} sub="bookings before converting" color={cy}/>
+    </div>
+
+    {/* Section: Customer Quality */}
+    <div style={{fontSize:11,color:am,fontWeight:600,textTransform:"uppercase",letterSpacing:1}}>Customer Quality</div>
+    <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+      <BigKPI label="Avg Customer LTV" value={fmt(execMetrics.avgLtv)} sub="lifetime value" color={gn}/>
+      <BigKPI label="LTV / ARPU" value={ltvArpu+"x"} sub="customer longevity indicator" color={bl}/>
+      <BigKPI label="Top 10% Revenue Share" value={execMetrics.top10Pct+"%"} sub="revenue concentration" color={execMetrics.top10Pct>70?rd:execMetrics.top10Pct>50?am:gn}/>
+    </div>
+  </div>);
+};
 
 // ═══ TAB 1: OVERVIEW ═══
 const Tab1=({data,dedupUc,momData,churnData,seasonData,years})=>{
@@ -465,10 +555,10 @@ const Tab4=({data,subKpis,ud,subStats,ppuStats,avgPpuBeforeSub})=>{
 };
 
 // ═══ MAIN ═══
-const TABS=[{id:"overview",label:"Overview",icon:"\uD83D\uDCCA"},{id:"customers",label:"Customers",icon:"\uD83D\uDC65"},{id:"retention",label:"Retention",icon:"\uD83D\uDD04"},{id:"subscriptions",label:"Subscriptions",icon:"\uD83D\uDC8E"}];
+const TABS=[{id:"exec",label:"Executive Summary",icon:"\uD83C\uDFAF"},{id:"overview",label:"Overview",icon:"\uD83D\uDCCA"},{id:"customers",label:"Customers",icon:"\uD83D\uDC65"},{id:"retention",label:"Retention",icon:"\uD83D\uDD04"},{id:"subscriptions",label:"Subscriptions",icon:"\uD83D\uDC8E"}];
 
 function Dashboard(){
-  const[tab,setTab]=useState("overview");const[si,setSi]=useState(0);const[ei,setEi]=useState(0);
+  const[tab,setTab]=useState("exec");const[si,setSi]=useState(0);const[ei,setEi]=useState(0);
   const[loading,setLoading]=useState(true);const[error,setError]=useState(null);const[allData,setAllData]=useState(null);const[lastRefresh,setLastRefresh]=useState(null);
 
   const loadData=()=>{setLoading(true);setError(null);
@@ -550,6 +640,7 @@ function Dashboard(){
       </div>
     </div>
     <div style={{display:"flex",gap:4,marginBottom:14,background:crd,border:"1px solid "+bdr,borderRadius:8,padding:3,width:"fit-content"}}>{TABS.map(t=>(<button key={t.id} onClick={()=>setTab(t.id)} style={{background:tab===t.id?am+"15":"transparent",color:tab===t.id?am:dm,border:"1px solid "+(tab===t.id?am+"30":"transparent"),borderRadius:6,padding:"6px 12px",fontSize:12,fontWeight:tab===t.id?600:400,whiteSpace:"nowrap"}}>{t.icon} {t.label}</button>))}</div>
+    {tab==="exec"&&<Tab0 data={filtered.monthly} dedupUc={dedupUc} momData={allData.momData} execMetrics={allData.execMetrics} subKpis={allData.subKpis} subStats={filteredSubPpu.subStats} ppuStats={filteredSubPpu.ppuStats} avgPpuBeforeSub={allData.avgPpuBeforeSub}/>}
     {tab==="overview"&&<Tab1 data={filtered.monthly} dedupUc={dedupUc} momData={allData.momData} churnData={allData.churnByMonth} seasonData={allData.seasonData} years={allData.years}/>}
     {tab==="customers"&&<Tab2 lifecycle={allData.lifecycle} rfmData={allData.rfmData} customerList={allData.customerList} filteredCustomers={filteredCustomers} migration={migrationInfo.migration} migLabel={migrationInfo.label} reactivatedCount={migrationInfo.reactivatedCount} avgPpuBeforeSub={allData.avgPpuBeforeSub}/>}
     {tab==="retention"&&<Tab3 cohorts={filtered.cohorts} monthlyRetention={filtered.monthlyRetention} filteredMonths={filtered.filteredMonths} qtrlyCohorts={filtered.qtrlyCohorts} filteredQtrs={filtered.filteredQtrs}/>}
