@@ -117,6 +117,23 @@ function computeAll(records,subMeta){
     return{l:monthLabel(mk),mk,bk:mb.length,uc:ids.size,nc:newIds.size,g:totG,n:totN,Bn,Dn,Pn,Gn,Sn,BnG,DnG,PnG,GnG,SnG,sb:subRev,ppuRev:totN-subRev,subBk,ppuBk:mb.length-subBk,ids:[...ids],avgRes:ids.size>0?+(mRes/ids.size).toFixed(1):0};
   });
 
+  // 90-day active rate per month: as of each month-end, % of all-time customers active in last 90d
+  // Precompute sorted booking dates per customer for efficiency
+  const custDates={};for(const r of bookings){if(!custDates[r.id])custDates[r.id]=[];custDates[r.id].push(r.date)}
+  for(const id in custDates)custDates[id].sort((a,b)=>a-b);
+  for(const m of monthly){
+    const[y,mo]=m.mk.split("-");const eom=new Date(parseInt(y),parseInt(mo),0);
+    let total=0,active=0;
+    for(const id in custDates){
+      const dates=custDates[id];if(dates[0]>eom)continue;// not a customer yet
+      total++;
+      // Find last booking <= eom (dates are sorted, walk back from end)
+      let lastBk=null;for(let i=dates.length-1;i>=0;i--){if(dates[i]<=eom){lastBk=dates[i];break}}
+      if(lastBk&&(eom-lastBk)/864e5<=90)active++;
+    }
+    m.activeRate90=total>0?+((active/total)*100).toFixed(1):0;
+  }
+
   // Monthly cohorts
   const cohorts=allMonths.map(mk=>{
     const cids=Object.entries(firstBooking).filter(([,d])=>monthKey(d)===mk).map(([id])=>id);
@@ -483,6 +500,7 @@ const Tab1=({data,dedupUc,momData,churnData,seasonData,years})=>{
       <Crd title="Avg Residency per Active Customer"><ResponsiveContainer width="100%" height={220}><LineChart data={data.map(d=>({month:d.l,Residency:d.avgRes}))}><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}}/><Tooltip content={<CTip/>}/><Line type="monotone" dataKey="Residency" stroke={bl} strokeWidth={2.5} name="Avg Residency" dot={{r:3,fill:bl}}/></LineChart></ResponsiveContainer></Crd>
       <Crd title="Churn & Reactivation"><ResponsiveContainer width="100%" height={220}><ComposedChart data={fChurn.filter(c=>c.churned+c.reactivated>0)}><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="l" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}}/><Tooltip content={<CTip/>}/><Legend wrapperStyle={{fontSize:11}}/><Bar dataKey="churned" fill={rd} name="Newly Churned" radius={[3,3,0,0]} opacity={0.8}/><Bar dataKey="reactivated" fill={gn} name="Reactivated" radius={[3,3,0,0]} opacity={0.8}/></ComposedChart></ResponsiveContainer></Crd>
     </div>
+    <Crd title="90-Day Active Rate"><ResponsiveContainer width="100%" height={220}><AreaChart data={data.map(d=>({month:d.l,Rate:d.activeRate90||0}))}><defs><linearGradient id="arGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={gn} stopOpacity={0.25}/><stop offset="95%" stopColor={gn} stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}} domain={[0,100]} tickFormatter={v=>v+"%"}/><Tooltip content={<CTip/>}/><Area type="monotone" dataKey="Rate" stroke={gn} strokeWidth={2.5} fill="url(#arGrad)" name="90d Active Rate" dot={{r:3,fill:gn}}/></AreaChart></ResponsiveContainer></Crd>
     <Crd title="Seasonality - Revenue by Month (YoY)">
       <ResponsiveContainer width="100%" height={250}>
         <BarChart data={seasonData.filter(s=>years.some(yr=>s["Rev"+yr]>0))}><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}}/><YAxis tick={{fill:dm,fontSize:10}} tickFormatter={fmt}/><Tooltip content={<CTip/>}/><Legend wrapperStyle={{fontSize:11}}/>
