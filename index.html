@@ -934,10 +934,10 @@ const Report=({data,allData,subKpis,subRenewals,execMetrics,subStats,ppuStats,on
   const ctxTable=ctx.length>12?ctx.slice(-12):ctx;
   const monYoY=m=>{const p=m.mk.split("-");const y=fullAll.find(x=>x.mk===(parseInt(p[0])-1)+"-"+p[1]);return y?pctChg(m.n,y.n):null};
   const pgStyle={width:780,margin:"20px auto",background:"white",padding:"36px 42px",boxShadow:"0 2px 14px rgba(0,0,0,0.1)",fontFamily:"'DM Sans',sans-serif"};
-  const th=h=><th key={h} style={{color:rTx,fontWeight:700,padding:"6px 10px",textAlign:"left",whiteSpace:"nowrap"}}>{h}</th>;
-  const thR=h=><th key={h} style={{color:rTx,fontWeight:700,padding:"6px 10px",textAlign:"right",whiteSpace:"nowrap"}}>{h}</th>;
-  const tdL={color:rTx,padding:"5px 10px",textAlign:"left"};
-  const tdR={color:rTx,padding:"5px 10px",textAlign:"right",fontVariantNumeric:"tabular-nums"};
+  const th=h=><th key={h} style={{color:rTx,fontWeight:700,padding:"6px 10px",textAlign:"center",whiteSpace:"nowrap"}}>{h}</th>;
+  const thR=h=><th key={h} style={{color:rTx,fontWeight:700,padding:"6px 10px",textAlign:"center",whiteSpace:"nowrap"}}>{h}</th>;
+  const tdL={color:rTx,padding:"5px 10px",textAlign:"center"};
+  const tdR={color:rTx,padding:"5px 10px",textAlign:"center",fontVariantNumeric:"tabular-nums"};
 
   return(<div style={{position:"fixed",inset:0,background:"#f2f2f7",overflowY:"auto",zIndex:100}} id="invreport">
     <style>{`@media print{.noprint{display:none!important}#invreport{position:static!important;background:white!important}.rpage{page-break-after:always;box-shadow:none!important;margin:0 auto!important}body{background:white!important}}@page{size:A4;margin:10mm}`}</style>
