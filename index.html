@@ -789,7 +789,7 @@ const Tab4=({data,subKpis,ud,subStats,ppuStats,avgPpuBeforeSub,subRenewals,allMo
       </div>
       {renByMo.length>0&&<div style={{marginTop:14}}><div style={{fontSize:11,color:dm,marginBottom:6}}>Renewals by Month</div><ResponsiveContainer width="100%" height={160}><BarChart data={renByMo}><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="l" tick={{fill:dm,fontSize:9}}/><YAxis tick={{fill:dm,fontSize:10}} allowDecimals={false}/><Tooltip content={<CTip/>}/><Bar dataKey="Renewals" fill={gn} name="Renewals" radius={[4,4,0,0]} opacity={0.85}/></BarChart></ResponsiveContainer></div>}
     </Crd>
-    <Crd title={<span>Subscriber vs Pay-Per-Use Comparison<DlBtn onClick={()=>downloadXlsx([["Customers",subStats.count,ppuStats.count],["Total Revenue",Math.round(subStats.totRev),Math.round(ppuStats.totRev)],["Avg Revenue",Math.round(subStats.avgRev),Math.round(ppuStats.avgRev)],["Avg Bookings",subStats.avgBk,ppuStats.avgBk],["90d Retention %",subStats.retPct,ppuStats.retPct]],["Metric","Subscribers","Pay-Per-Use"],"Awwzo_Sub_vs_PPU")}/></span>}>
+    <Crd title={<span>Subscriber vs Pay-Per-Use Comparison<DlBtn onClick={()=>downloadXlsx([["Customers",subStats.count,ppuStats.count],["Total Revenue",Math.round(subStats.totRev),Math.round(ppuStats.totRev)],["Avg Revenue",Math.round(subStats.avgRev),Math.round(ppuStats.avgRev)],["Avg Bookings",subStats.avgBk,ppuStats.avgBk],["90d Retention % (excl. new)",subStats.retPct,ppuStats.retPct]],["Metric","Subscribers","Pay-Per-Use"],"Awwzo_Sub_vs_PPU")}/></span>}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         <div style={{background:pu+"10",border:"1px solid "+pu+"30",borderRadius:8,padding:12}}>
           <div style={{fontSize:13,fontWeight:700,color:pu,marginBottom:8}}>Subscribers ({subStats.count})</div>
@@ -797,7 +797,7 @@ const Tab4=({data,subKpis,ud,subStats,ppuStats,avgPpuBeforeSub,subRenewals,allMo
             <div><div style={{fontSize:10,color:dm}}>Avg Revenue</div><div style={{fontSize:16,fontWeight:700,color:tx}}>{fmt(subStats.avgRev)}</div></div>
             <div><div style={{fontSize:10,color:dm}}>Avg Bookings</div><div style={{fontSize:16,fontWeight:700,color:tx}}>{subStats.avgBk}</div></div>
             <div><div style={{fontSize:10,color:dm}}>Total Revenue</div><div style={{fontSize:16,fontWeight:700,color:gn}}>{fmt(subStats.totRev)}</div></div>
-            <div><div style={{fontSize:10,color:dm}}>Active (90d)</div><div style={{fontSize:16,fontWeight:700,color:gn}}>{subStats.retPct}%</div></div>
+            <div><div style={{fontSize:10,color:dm}}>Active (90d, excl. new)</div><div style={{fontSize:16,fontWeight:700,color:gn}}>{subStats.retPct}%</div></div>
           </div>
         </div>
         <div style={{background:og+"10",border:"1px solid "+og+"30",borderRadius:8,padding:12}}>
@@ -806,7 +806,7 @@ const Tab4=({data,subKpis,ud,subStats,ppuStats,avgPpuBeforeSub,subRenewals,allMo
             <div><div style={{fontSize:10,color:dm}}>Avg Revenue</div><div style={{fontSize:16,fontWeight:700,color:tx}}>{fmt(ppuStats.avgRev)}</div></div>
             <div><div style={{fontSize:10,color:dm}}>Avg Bookings</div><div style={{fontSize:16,fontWeight:700,color:tx}}>{ppuStats.avgBk}</div></div>
             <div><div style={{fontSize:10,color:dm}}>Total Revenue</div><div style={{fontSize:16,fontWeight:700,color:gn}}>{fmt(ppuStats.totRev)}</div></div>
-            <div><div style={{fontSize:10,color:dm}}>Active (90d)</div><div style={{fontSize:16,fontWeight:700,color:ppuStats.retPct>=50?gn:rd}}>{ppuStats.retPct}%</div></div>
+            <div><div style={{fontSize:10,color:dm}}>Active (90d, excl. new)</div><div style={{fontSize:16,fontWeight:700,color:ppuStats.retPct>=50?gn:rd}}>{ppuStats.retPct}%</div></div>
           </div>
         </div>
       </div>
@@ -1084,7 +1084,7 @@ const Report=({data,allData,subKpis,subRenewals,execMetrics,subStats,ppuStats,on
             <div style={{fontSize:12,fontWeight:800,color:rTx,marginBottom:6}}>{nm} ({st.count})</div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,fontSize:10.5,color:rTx}}>
               <div>Avg Revenue: <b>{fmt(st.avgRev)}</b></div><div>Avg Bookings: <b>{st.avgBk}</b></div>
-              <div>Total Revenue: <b>{fmt(st.totRev)}</b></div><div>90d Retention: <b>{st.retPct}%</b></div>
+              <div>Total Revenue: <b>{fmt(st.totRev)}</b></div><div>90d Retention (excl. new): <b>{st.retPct}%</b></div>
             </div>
           </div>))}
         </div>
@@ -1184,7 +1184,7 @@ function Dashboard(){
     const fRecs=allData.records.filter(r=>mks.has(r.mk));const fBk=allData.bookings.filter(r=>mks.has(r.mk));
     const subIds=new Set();const ppuIds=new Set();
     for(const r of fBk){if(allData.allSubIds.has(r.id))subIds.add(r.id);else ppuIds.add(r.id)}
-    function stats(ids){const n=ids.size;if(!n)return{count:0,totRev:0,avgRev:0,avgBk:0,retPct:0};let totRev=0,totBk=0,active=0;const now=new Date();for(const id of ids){totRev+=fRecs.filter(r=>r.id===id).reduce((a,r)=>a+r.net,0);totBk+=fBk.filter(r=>r.id===id).length;if(allData.lastBooking[id]&&(now-allData.lastBooking[id])/864e5<90)active++}return{count:n,totRev:Math.round(totRev),avgRev:Math.round(totRev/n),avgBk:+(totBk/n).toFixed(1),retPct:spct(active,n)}}
+    function stats(ids){const n=ids.size;if(!n)return{count:0,totRev:0,avgRev:0,avgBk:0,retPct:0};let totRev=0,totBk=0,active=0,retBase=0;const now=new Date();for(const id of ids){totRev+=fRecs.filter(r=>r.id===id).reduce((a,r)=>a+r.net,0);totBk+=fBk.filter(r=>r.id===id).length;const fb=allData.firstBooking[id];if(fb&&(now-fb)/864e5>90){retBase++;if(allData.lastBooking[id]&&(now-allData.lastBooking[id])/864e5<=90)active++}}return{count:n,totRev:Math.round(totRev),avgRev:Math.round(totRev/n),avgBk:+(totBk/n).toFixed(1),retPct:spct(active,retBase)}}
     return{subStats:stats(subIds),ppuStats:stats(ppuIds)};
   },[allData,filtered.monthly]);
 
