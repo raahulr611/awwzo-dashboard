@@ -74,8 +74,8 @@ function monthKey(d){return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(
 function monthLabel(mk){const[y,m]=mk.split("-");const ms=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];return ms[parseInt(m)-1]+" "+y.slice(2)}
 function qtrKey(mk){const[y,m]=mk.split("-");return y+"-Q"+Math.ceil(parseInt(m)/3)}
 function qtrLabel(qk){const[y,q]=qk.split("-");return q+"'"+y.slice(2)}
-function fqKey(mk){const p=mk.split("-");const y=parseInt(p[0]),m=parseInt(p[1]);const fy=m>=4?y+1:y;const q=m>=4?Math.ceil((m-3)/3):4;return fy+"-Q"+q}
-function fqLabel(qk){const p=qk.split("-");return p[1]+" FY"+String(p[0]).slice(2)}
+function fqKey(mk){const p=mk.split("-");return p[0]+"-Q"+Math.ceil(parseInt(p[1])/3)}
+function fqLabel(qk){const p=qk.split("-");return p[1]+" "+p[0]}
 
 function processAllData(csvResults){
   const records=[];const subMeta=[];
@@ -179,7 +179,7 @@ function computeAll(records,subMeta){
   const allCustomers=Object.keys(firstBooking);
   const totalSpend={};for(const r of records){totalSpend[r.id]=(totalSpend[r.id]||0)+r.net}
 
-  // Fiscal quarterly cohorts (Indian FY, Q1=Apr-Jun) — for investor report
+  // Quarterly cohorts (calendar) — for investor report
   const fullMks=allMonths.filter(mk=>mk!==nowMkP);
   const monthsPerFq={};for(const mk of fullMks){const q=fqKey(mk);monthsPerFq[q]=(monthsPerFq[q]||0)+1}
   const firstFq={};for(const[id,d]of Object.entries(firstBooking))firstFq[id]=fqKey(monthKey(d));
@@ -864,7 +864,7 @@ const Report=({data,allData,subKpis,subRenewals,execMetrics,subStats,ppuStats,on
   const prevSubShare=prev?spct(prevSlice.reduce((a,d)=>a+d.sb,0),prev.rev):null;
   const aw90=execMetrics.activityWindows.find(a=>a.w===90);
   const bestMonth=full.reduce((a,m)=>m.n>a.n?m:a,full[0]);
-  // Fiscal quarterly aggregation from ALL history — FULL quarters only
+  // Quarterly aggregation from ALL history — FULL quarters only
   const fqMap={};
   for(const m of fullAll){const qk=fqKey(m.mk);if(!fqMap[qk])fqMap[qk]={qk,ql:fqLabel(qk),mCount:0,n:0,bk:0,nc:0,Bn:0,Dn:0,Pn:0,Gn:0,Sn:0,ids:new Set()};const q=fqMap[qk];q.mCount++;q.n+=m.n;q.bk+=m.bk;q.nc+=m.nc;q.Bn+=m.Bn;q.Dn+=m.Dn;q.Pn+=m.Pn;q.Gn+=m.Gn;q.Sn+=m.Sn;for(const id of m.ids)q.ids.add(id)}
   const fqAll=Object.values(fqMap).sort((a,b)=>a.qk<b.qk?-1:1);
@@ -958,12 +958,12 @@ const Report=({data,allData,subKpis,subRenewals,execMetrics,subStats,ppuStats,on
       {watch.length>0&&<RSec title="Watch Items">
         {watch.map((w,i)=>(<div key={i} style={{display:"flex",gap:8,fontSize:11.5,color:rTx,marginBottom:6,lineHeight:1.5}}><span style={{color:"#ffa858",fontWeight:800}}>●</span><span>{w}</span></div>))}
       </RSec>}
-      <div style={{fontSize:8.5,color:rDm,marginTop:14}}>All figures net revenue. PPU = pay-per-use (non-subscription) revenue; subscription-covered visits are billed under Subscription. Partial months excluded; quarterly views show full fiscal quarters only (Q1 = Apr–Jun). "Prev" = immediately preceding {isMonthly?"month":isQuarterly?"quarter":n+"-month period"}; YoY = same {isMonthly?"month":"months"} last year. Comparisons use full history even when outside the selected range.</div>
+      <div style={{fontSize:8.5,color:rDm,marginTop:14}}>All figures net revenue. PPU = pay-per-use (non-subscription) revenue; subscription-covered visits are billed under Subscription. Partial months excluded; quarterly views show full calendar quarters only. "Prev" = immediately preceding {isMonthly?"month":isQuarterly?"quarter":n+"-month period"}; YoY = same {isMonthly?"month":"months"} last year. Comparisons use full history even when outside the selected range.</div>
     </div>
 
     {/* PAGE 2 — REVENUE: QUARTERLY */}
     <div className="rpage" style={pgStyle}>
-      <RSec title="Revenue — Quarterly (Indian Fiscal)">
+      <RSec title="Revenue — Quarterly">
         <BarChart width={chartW} height={250} data={fqChartData} margin={{top:18}}>
           <CartesianGrid strokeDasharray="3 3" stroke={rGrid}/><XAxis dataKey="q" tick={{fill:rDm,fontSize:9}}/><YAxis tick={{fill:rDm,fontSize:9}} tickFormatter={fmt}/><Legend wrapperStyle={{fontSize:10}}/>
           {svcKeys.map((k,i)=>(<Bar key={k} dataKey={k} stackId="1" fill={rSvc[k]} radius={i===svcKeys.length-1?[3,3,0,0]:undefined}>{i===svcKeys.length-1&&<LabelList dataKey="Total" position="top" formatter={fmt} style={{fill:rTx,fontSize:9,fontWeight:700}}/>}</Bar>))}
@@ -1012,7 +1012,7 @@ const Report=({data,allData,subKpis,subRenewals,execMetrics,subStats,ppuStats,on
 
     {/* PAGE 4 — CUSTOMERS: QUARTERLY THEN MONTHLY */}
     <div className="rpage" style={pgStyle}>
-      <RSec title="Customers — Quarterly (Indian Fiscal)">
+      <RSec title="Customers — Quarterly">
         <ComposedChart width={chartW} height={210} data={fqtrs.map(q=>({q:q.ql,"New Customers":q.nc,"Returning Customers":q.ret,Total:q.uc}))} margin={{top:18}}>
           <CartesianGrid strokeDasharray="3 3" stroke={rGrid}/><XAxis dataKey="q" tick={{fill:rDm,fontSize:9}}/><YAxis tick={{fill:rDm,fontSize:9}}/><Legend wrapperStyle={{fontSize:10}}/>
           <Bar dataKey="New Customers" stackId="c" fill="#ffa858"/><Bar dataKey="Returning Customers" stackId="c" fill="#30287d" radius={[3,3,0,0]}><LabelList dataKey="Total" position="top" style={{fill:rTx,fontSize:9,fontWeight:700}}/></Bar>
@@ -1038,7 +1038,7 @@ const Report=({data,allData,subKpis,subRenewals,execMetrics,subStats,ppuStats,on
 
     {/* PAGE 5 — RETENTION: QUARTERLY THEN MONTHLY */}
     <div className="rpage" style={pgStyle}>
-      <RSec title="Retention — Quarterly Cohorts (Indian Fiscal)">
+      <RSec title="Retention — Quarterly Cohorts">
         <table style={{fontSize:10}}>
           <thead><tr style={{borderBottom:"1.5px solid "+rTx}}>{["Cohort","New Customers","2+ Bookings","3+ Bookings","Cohort LTV","Days to 2nd"].map(th)}</tr></thead>
           <tbody>{fqCoh.map((c,i)=>{const inP=fqSet.includes(c.q);return(<tr key={i} style={{borderBottom:"1px solid "+rBdr,background:inP?"#fff7ee":"transparent"}}>
