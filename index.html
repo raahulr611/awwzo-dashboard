@@ -90,7 +90,7 @@ function processAllData(csvResults){
   const grooming=rowsToObjects(csvResults.Grooming);
   for(const r of grooming){if(r["Booking Status"]&&r["Booking Status"].toLowerCase()!=="confirmed")continue;const d=parseDate(r["Service Date"],r["Month"]);if(!d)continue;const id=r["Identifier"];if(!id)continue;records.push({service:"Grooming",id,date:d,gross:parseNum(r["Total Gross Amount"]),net:parseNum(r["Total Net Amount"]),stay:"ppu",isBooking:true,overnights:0})}
   const subs=rowsToObjects(csvResults.Subscription);
-  for(const r of subs){if(r["Booking Status"]&&r["Booking Status"].toLowerCase()!=="confirmed")continue;const d=parseDate(r["Payment Date"],r["Month"]);if(!d)continue;const id=r["Identifier"];if(!id)continue;records.push({service:"Subscription",id,date:d,gross:parseNum(r["Total Gross Amount"]),net:parseNum(r["Total Net Amount"]),stay:"subscription",isBooking:false,overnights:0});subMeta.push({id,type:(r["Type"]||"").trim(),subFor:(r["Subscription For"]||"").trim()})}
+  for(const r of subs){if(r["Booking Status"]&&r["Booking Status"].toLowerCase()!=="confirmed")continue;const d=parseDate(r["Payment Date"],r["Month"]);if(!d)continue;const id=r["Identifier"];if(!id)continue;let sSt=parseDate(r["Start Date"],r["Month"]);let sEn=parseDate(r["End Date"],r["Month"]);if(sSt&&sEn&&sEn<sSt){sEn=new Date(sEn);sEn.setFullYear(sEn.getFullYear()+1)}if(!sEn){const base=sSt||d;sEn=new Date(base.getTime()+30*864e5)}records.push({service:"Subscription",id,date:d,gross:parseNum(r["Total Gross Amount"]),net:parseNum(r["Total Net Amount"]),stay:"subscription",isBooking:false,overnights:0,subStart:sSt,subEnd:sEn});subMeta.push({id,type:(r["Type"]||"").trim(),subFor:(r["Subscription For"]||"").trim()})}
   records.forEach(r=>{r.mk=monthKey(r.date)});
   var now=new Date();var cutoff=now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0");
   return{records:records.filter(r=>r.mk<=cutoff),subMeta};
@@ -284,7 +284,7 @@ function computeAll(records,subMeta){
 
   // Subscription renewals: group sub billing records by customer, sorted by payment date
   const subsByCustomer={};
-  for(const r of records){if(r.service==="Subscription"){if(!subsByCustomer[r.id])subsByCustomer[r.id]=[];subsByCustomer[r.id].push({date:r.date,net:r.net,mk:r.mk})}}
+  for(const r of records){if(r.service==="Subscription"){if(!subsByCustomer[r.id])subsByCustomer[r.id]=[];subsByCustomer[r.id].push({date:r.date,net:r.net,mk:r.mk,start:r.subStart,end:r.subEnd})}}
   for(const id in subsByCustomer)subsByCustomer[id].sort((a,b)=>a.date-b.date);
   const totalSubCustomers=Object.keys(subsByCustomer).length;
   const renewedCustomers=Object.entries(subsByCustomer).filter(([,subs])=>subs.length>=2);
@@ -312,7 +312,22 @@ function computeAll(records,subMeta){
   // Sub count distribution
   const subCountDist={1:0,2:0,3:0,"4+":0};
   for(const[,subs]of Object.entries(subsByCustomer)){const c=subs.length;if(c===1)subCountDist[1]++;else if(c===2)subCountDist[2]++;else if(c===3)subCountDist[3]++;else subCountDist["4+"]++}
-  const subRenewals={totalSubCustomers,renewalCount,renewalRate,avgRenewalDays:+avgRenewalDays,medianRenewalDays,ren30,ren90,ren180,ren365,totalEvents:renewalGaps.length,renewalsByMonth,subCountDist,subGapList};
+  // Tenure-complete renewal: base = customers whose subscription tenure has ended (or who already renewed); pending tenures excluded
+  let tenurePending=0,tenureBase=0,tenureRenewed=0,renBeforeEnd=0,renAfterEnd=0;
+  const nowD=new Date();
+  for(const[,subs2]of Object.entries(subsByCustomer)){
+    if(subs2.length>=2){
+      tenureBase++;tenureRenewed++;
+      const first=subs2[0],second=subs2[1];
+      if(first.end&&second.date<=first.end)renBeforeEnd++;else renAfterEnd++;
+    }else{
+      const only=subs2[0];
+      if(only.end&&only.end>=nowD)tenurePending++;
+      else tenureBase++;
+    }
+  }
+  const tenureRate=spct(tenureRenewed,tenureBase);
+  const subRenewals={totalSubCustomers,renewalCount,renewalRate,avgRenewalDays:+avgRenewalDays,medianRenewalDays,ren30,ren90,ren180,ren365,totalEvents:renewalGaps.length,renewalsByMonth,subCountDist,subGapList,tenureBase,tenureRenewed,tenureRate,tenurePending,renBeforeEnd,renAfterEnd};
 
   // Seasonality data (group by month number across years)
   const seasonality={};
@@ -763,9 +778,10 @@ const Tab4=({data,subKpis,ud,subStats,ppuStats,avgPpuBeforeSub,subRenewals,allMo
       <KPI label="Avg PPU Before Sub" value={avgPpuBeforeSub} color={cy} sub="conversion funnel"/>
     </div>
     {/* Renewal Section */}
-    <Crd title={<span>Subscription Renewals<DlBtn onClick={()=>downloadXlsx([["Total Sub Customers",sr.totalSubCustomers||0],["Renewed (2+ subs)",sr.renewalCount||0],["Renewal Rate %",sr.renewalRate||0],["Avg Days to Renew",sr.avgRenewalDays||0],["Median Days to Renew",sr.medianRenewalDays||0],["Total Renewal Events",sr.totalEvents||0],["Within 30 days",sr.ren30||0],["Within 90 days",sr.ren90||0],["Within 180 days",sr.ren180||0],["Within 365 days",sr.ren365||0],...Object.entries(sr.subCountDist||{}).map(([k,v])=>["Customers with "+k+" sub(s)",v])],["Metric","Value"],"Awwzo_Sub_Renewals")}/>{subKpis.totalSubs>sr.totalSubCustomers&&<span style={{fontSize:9,color:am,fontWeight:400,marginLeft:8}}>{"\u26A0"} {subKpis.totalSubs-sr.totalSubCustomers} of {subKpis.totalSubs} subscribers have subscription visits but no payment row in the Subscription sheet — renewal metrics use payment records only ({sr.totalSubCustomers})<button onClick={()=>downloadXlsx((sr.subGapList||[]).map((g,i)=>[i+1,g.id,g.visits,g.services,g.lastVisit]),["#","Pet + Parent","Sub Visits","Services","Last Visit"],"Awwzo_Missing_Sub_Payments")} style={{background:am+"15",color:am,border:"1px solid "+am+"30",borderRadius:5,padding:"2px 8px",fontSize:9,fontWeight:600,marginLeft:6}}>{"\u2B07"} Download list</button></span>}</span>}>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:14}}>
-        <div style={{background:crd2,borderRadius:8,padding:12,textAlign:"center"}}><div style={{fontSize:10,color:dm}}>Renewal Rate</div><div style={{fontSize:22,fontWeight:700,color:sr.renewalRate>=30?gn:sr.renewalRate>=15?am:rd}}>{sr.renewalRate||0}%</div><div style={{fontSize:9,color:dm}}>{sr.renewalCount||0} of {sr.totalSubCustomers||0} renewed</div></div>
+    <Crd title={<span>Subscription Renewals<DlBtn onClick={()=>downloadXlsx([["Renewal Rate — Completed Tenures %",sr.tenureRate||0],["Completed-Tenure Base",sr.tenureBase||0],["Renewed (of completed)",sr.tenureRenewed||0],["Renewed Before Expiry",sr.renBeforeEnd||0],["Renewed After Expiry",sr.renAfterEnd||0],["Tenures Still Running (excluded)",sr.tenurePending||0],["Total Sub Customers",sr.totalSubCustomers||0],["Renewed (2+ subs)",sr.renewalCount||0],["Lifetime Repeat Rate %",sr.renewalRate||0],["Avg Days to Renew",sr.avgRenewalDays||0],["Median Days to Renew",sr.medianRenewalDays||0],["Total Renewal Events",sr.totalEvents||0],["Within 30 days",sr.ren30||0],["Within 90 days",sr.ren90||0],["Within 180 days",sr.ren180||0],["Within 365 days",sr.ren365||0],...Object.entries(sr.subCountDist||{}).map(([k,v])=>["Customers with "+k+" sub(s)",v])],["Metric","Value"],"Awwzo_Sub_Renewals")}/>{subKpis.totalSubs>sr.totalSubCustomers&&<span style={{fontSize:9,color:am,fontWeight:400,marginLeft:8}}>{"\u26A0"} {subKpis.totalSubs-sr.totalSubCustomers} of {subKpis.totalSubs} subscribers have subscription visits but no payment row in the Subscription sheet — renewal metrics use payment records only ({sr.totalSubCustomers})<button onClick={()=>downloadXlsx((sr.subGapList||[]).map((g,i)=>[i+1,g.id,g.visits,g.services,g.lastVisit]),["#","Pet + Parent","Sub Visits","Services","Last Visit"],"Awwzo_Missing_Sub_Payments")} style={{background:am+"15",color:am,border:"1px solid "+am+"30",borderRadius:5,padding:"2px 8px",fontSize:9,fontWeight:600,marginLeft:6}}>{"\u2B07"} Download list</button></span>}</span>}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10,marginBottom:14}}>
+        <div style={{background:gn+"10",border:"1px solid "+gn+"30",borderRadius:8,padding:12,textAlign:"center"}}><div style={{fontSize:10,color:dm}}>Renewal Rate (Completed Tenures)</div><div style={{fontSize:22,fontWeight:700,color:sr.tenureRate>=50?gn:sr.tenureRate>=30?am:rd}}>{sr.tenureRate||0}%</div><div style={{fontSize:9,color:dm}}>{sr.tenureRenewed||0} of {sr.tenureBase||0} · {sr.tenurePending||0} tenures still running (excluded)</div><div style={{fontSize:8.5,color:dm,marginTop:2}}>{sr.renBeforeEnd||0} renewed before expiry · {sr.renAfterEnd||0} after</div></div>
+        <div style={{background:crd2,borderRadius:8,padding:12,textAlign:"center"}}><div style={{fontSize:10,color:dm}}>Lifetime Repeat Rate</div><div style={{fontSize:22,fontWeight:700,color:sr.renewalRate>=30?gn:sr.renewalRate>=15?am:rd}}>{sr.renewalRate||0}%</div><div style={{fontSize:9,color:dm}}>{sr.renewalCount||0} of {sr.totalSubCustomers||0} incl. running tenures</div></div>
         <div style={{background:crd2,borderRadius:8,padding:12,textAlign:"center"}}><div style={{fontSize:10,color:dm}}>Avg Days to Renew</div><div style={{fontSize:22,fontWeight:700,color:tx}}>{sr.avgRenewalDays||"—"}</div><div style={{fontSize:9,color:dm}}>payment to payment</div></div>
         <div style={{background:crd2,borderRadius:8,padding:12,textAlign:"center"}}><div style={{fontSize:10,color:dm}}>Median Days to Renew</div><div style={{fontSize:22,fontWeight:700,color:tx}}>{sr.medianRenewalDays||"—"}</div><div style={{fontSize:9,color:dm}}>midpoint</div></div>
         <div style={{background:crd2,borderRadius:8,padding:12,textAlign:"center"}}><div style={{fontSize:10,color:dm}}>Total Renewals</div><div style={{fontSize:22,fontWeight:700,color:bl}}>{sr.totalEvents||0}</div><div style={{fontSize:9,color:dm}}>renewal events</div></div>
@@ -902,7 +918,7 @@ const Report=({data,allData,subKpis,subRenewals,execMetrics,subStats,ppuStats,on
   wins.push(svc[0][0]+" is the largest revenue line at "+spct(svc[0][1],svcTot)+"% of period revenue");
   if(prevSubShare!==null&&subShare!==prevSubShare)wins.push("Subscription revenue share moved "+prevSubShare+"% → "+subShare+"%");
   if(aw90){const sRate=spct(aw90.Subscribers.active,aw90.Subscribers.base),pRate=spct(aw90.PPU.active,aw90.PPU.base);wins.push("90-day active rate: subscribers "+sRate+"% vs pay-per-use "+pRate+"% — subscription drives stickiness")}
-  if(subRenewals.renewalRate)wins.push("Subscription renewal rate "+subRenewals.renewalRate+"% (median "+subRenewals.medianRenewalDays+" days to renew)");
+  if(subRenewals.tenureRate)wins.push("Subscription renewal rate "+subRenewals.tenureRate+"% among completed tenures ("+subRenewals.tenureRenewed+" of "+subRenewals.tenureBase+"; "+subRenewals.tenurePending+" tenures still running, excluded) · median "+subRenewals.medianRenewalDays+" days between purchases");
   const lastFq=fqGrowth.slice(-1)[0];
   if(lastFq&&lastFq.qoq!==null)wins.push(lastFq.ql+" closed at "+fmt(lastFq.n)+" ("+rPct(lastFq.qoq)+" QoQ"+(lastFq.yoyQ!==null?", "+rPct(lastFq.yoyQ)+" YoY":"")+")");
   if(execMetrics.top10Pct>45)watch.push("Revenue concentration: top 10% of customers contribute "+execMetrics.top10Pct+"% of revenue");
@@ -950,7 +966,7 @@ const Report=({data,allData,subKpis,subRenewals,execMetrics,subStats,ppuStats,on
         <RStat label="Bookings" value={cur.bk.toLocaleString()} sub={prev?rPct(pctChg(cur.bk,prev.bk))+" vs prev":""} subColor={prev?rPctCol(pctChg(cur.bk,prev.bk)):rDm}/>
         <RStat label="Active Customers" value={cur.uc} sub={prev?rPct(pctChg(cur.uc,prev.uc))+" vs prev":""} subColor={prev?rPctCol(pctChg(cur.uc,prev.uc)):rDm}/>
         <RStat label="New Customers" value={cur.nc} sub={prev?rPct(pctChg(cur.nc,prev.nc))+" vs prev":""} subColor={prev?rPctCol(pctChg(cur.nc,prev.nc)):rDm}/>
-        <RStat label="Subscriber Penetration" value={subKpis.penetration+"%"} sub={subKpis.totalSubs+" subscribers · renewal "+(subRenewals.renewalRate||0)+"%"}/>
+        <RStat label="Subscriber Penetration" value={subKpis.penetration+"%"} sub={subKpis.totalSubs+" subscribers · renewal "+(subRenewals.tenureRate||0)+"% (completed tenures)"}/>
       </div>
       <RSec title="Key Highlights">
         {wins.map((w,i)=>(<div key={i} style={{display:"flex",gap:8,fontSize:11.5,color:rTx,marginBottom:6,lineHeight:1.5}}><span style={{color:"#0a7d43",fontWeight:800}}>▲</span><span>{w}</span></div>))}
