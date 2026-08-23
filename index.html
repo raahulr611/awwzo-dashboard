@@ -57,7 +57,7 @@ const sdiv=(a,b)=>b?Math.round(a/b):0;
 const spct=(a,b)=>b?+((a/b)*100).toFixed(1):0;
 const pctChg=(cur,prev)=>prev?+(((cur-prev)/prev)*100).toFixed(1):null;
 
-function fetchCSV(url){return fetch(url).then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.text()}).then(t=>Papa.parse(t,{header:false,skipEmptyLines:true}).data)}
+function fetchCSV(url){return fetch(url+"&cb="+Date.now(),{cache:"no-store"}).then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.text()}).then(t=>Papa.parse(t,{header:false,skipEmptyLines:true}).data)}
 function findHeader(rows){for(let i=0;i<Math.min(5,rows.length);i++){if(rows[i].some(c=>c&&c.trim()==="Parent")&&rows[i].some(c=>c&&c.trim()==="Identifier"))return i}return 0}
 function rowsToObjects(rows){const hi=findHeader(rows);const headers=rows[hi].map(h=>(h||"").trim());const data=[];for(let i=hi+1;i<rows.length;i++){const obj={};let has=false;headers.forEach((h,j)=>{if(h){obj[h]=(rows[i][j]||"").trim();if(obj[h])has=true}});if(has)data.push(obj)}return data}
 function parseNum(v){if(!v)return 0;const n=parseFloat(String(v).replace(/,/g,""));return isNaN(n)?0:n}
@@ -105,6 +105,7 @@ function computeAll(records,subMeta){
   const bookingsByMonth={};for(const r of bookings){if(!bookingsByMonth[r.mk])bookingsByMonth[r.mk]=new Set();bookingsByMonth[r.mk].add(r.id)}
 
   // Monthly data
+  const nowMkP=monthKey(new Date());
   const monthly=allMonths.map(mk=>{
     const mr=records.filter(r=>r.mk===mk);const mb=bookings.filter(r=>r.mk===mk);
     const ids=new Set(mb.map(r=>r.id));const newIds=new Set();
@@ -114,7 +115,7 @@ function computeAll(records,subMeta){
     const subBk=mb.filter(r=>r.stay==="subscription").length;const subRev=mr.filter(r=>r.service==="Subscription").reduce((a,r)=>a+r.net,0);
     // Residency this month
     let mRes=0;for(const r of mb){if(r.service==="Boarding")mRes+=(r.overnights||1);else mRes+=1}
-    return{l:monthLabel(mk),mk,bk:mb.length,uc:ids.size,nc:newIds.size,g:totG,n:totN,Bn,Dn,Pn,Gn,Sn,BnG,DnG,PnG,GnG,SnG,sb:subRev,ppuRev:totN-subRev,subBk,ppuBk:mb.length-subBk,ids:[...ids],avgRes:ids.size>0?+(mRes/ids.size).toFixed(1):0};
+    return{l:monthLabel(mk),mk,partial:mk===nowMkP,bk:mb.length,uc:ids.size,nc:newIds.size,g:totG,n:totN,Bn,Dn,Pn,Gn,Sn,BnG,DnG,PnG,GnG,SnG,sb:subRev,ppuRev:totN-subRev,subBk,ppuBk:mb.length-subBk,ids:[...ids],avgRes:ids.size>0?+(mRes/ids.size).toFixed(1):0};
   });
 
   // 90-day active rate per month: as of each month-end, % of all-time customers active in last 90d
@@ -163,10 +164,11 @@ function computeAll(records,subMeta){
     return{q:cq,ql:qtrLabel(cq),sz,retention,g2,g3,g5,net:Math.round(cnet),ltv:sz>0?Math.round(cnet/sz):0,ttr:ttrC>0?+(ttrSum/ttrC).toFixed(1):null};
   });
 
-  // MoM/YoY
+  // MoM/YoY (growth suppressed when either side is a partial month)
   const momData=monthly.map((m,i)=>{
     const prev=i>0?monthly[i-1]:null;const yoyIdx=monthly.findIndex(x=>{const[cy2,cm]=m.mk.split("-");return x.mk===(parseInt(cy2)-1)+"-"+cm});const yoy=yoyIdx>=0?monthly[yoyIdx]:null;
-    return{l:m.l,mk:m.mk,revMoM:prev?pctChg(m.n,prev.n):null,bkMoM:prev?pctChg(m.bk,prev.bk):null,ucMoM:prev?pctChg(m.uc,prev.uc):null,revYoY:yoy?pctChg(m.n,yoy.n):null,bkYoY:yoy?pctChg(m.bk,yoy.bk):null,ucYoY:yoy?pctChg(m.uc,yoy.uc):null,rev:m.n,bk:m.bk,uc:m.uc};
+    const okP=prev&&!m.partial&&!prev.partial;const okY=yoy&&!m.partial&&!yoy.partial;
+    return{l:m.l,mk:m.mk,partial:m.partial,revMoM:okP?pctChg(m.n,prev.n):null,bkMoM:okP?pctChg(m.bk,prev.bk):null,ucMoM:okP?pctChg(m.uc,prev.uc):null,revYoY:okY?pctChg(m.n,yoy.n):null,bkYoY:okY?pctChg(m.bk,yoy.bk):null,ucYoY:okY?pctChg(m.uc,yoy.uc):null,rev:m.n,bk:m.bk,uc:m.uc};
   });
 
   // Lifecycle
@@ -175,10 +177,15 @@ function computeAll(records,subMeta){
   const allCustomers=Object.keys(firstBooking);
   const totalSpend={};for(const r of records){totalSpend[r.id]=(totalSpend[r.id]||0)+r.net}
 
+  // Precompute sorted booking dates per customer (used by getPhase — avoids O(bookings) scan per call)
+  const phaseDates={};for(const r of bookings){if(!phaseDates[r.id])phaseDates[r.id]=[];phaseDates[r.id].push(r.date)}
+  for(const id in phaseDates)phaseDates[id].sort((a,b)=>a-b);
+
   function getPhase(id,asOf){
-    const fv=firstBooking[id];if(!fv)return null;
-    const lv=bookings.filter(r=>r.id===id&&r.date<=asOf).reduce((a,r)=>r.date>a?r.date:a,new Date(0));
-    if(lv.getTime()===0)return null;const rec=(asOf-lv)/864e5;const dsf=(asOf-fv)/864e5;
+    const fv=firstBooking[id];if(!fv||fv>asOf)return null;
+    const dates=phaseDates[id];if(!dates)return null;
+    let lv=null;for(let i=dates.length-1;i>=0;i--){if(dates[i]<=asOf){lv=dates[i];break}}
+    if(!lv)return null;const rec=(asOf-lv)/864e5;const dsf=(asOf-fv)/864e5;
     if(dsf<=30)return"New";if(rec<90)return"Active";if(rec<180)return"Dormant";if(rec<=365)return"At Risk";return"Churned";
   }
 
@@ -303,8 +310,10 @@ function computeAll(records,subMeta){
   const top10Rev=allSpends.slice(0,top10Count).reduce((a,v)=>a+v,0);
   const top10Pct=spct(top10Rev,totalRev);
   const activeCount=allCustomers.filter(id=>{const lb=lastBooking[id];return lb&&(now-lb)/864e5<90}).length;
-  const latestChurn=churnByMonth.length>1?churnByMonth[churnByMonth.length-1]:null;
-  const churnRatePct=latestChurn&&activeCount>0?spct(latestChurn.churned,activeCount+latestChurn.churned):0;
+  // Churn: avg of last 3 full months (excludes current partial month) — less noisy than a single month
+  const churnWindow=churnByMonth.length>4?churnByMonth.slice(-4,-1):churnByMonth.slice(0,-1);
+  const avgChurned=churnWindow.length>0?churnWindow.reduce((a,c)=>a+c.churned,0)/churnWindow.length:0;
+  const churnRatePct=activeCount>0?spct(avgChurned,activeCount+avgChurned):0;
   const allTtr=Object.values(ttrDays);
   const avgTtr=allTtr.length>0?+(allTtr.reduce((a,v)=>a+v,0)/allTtr.length).toFixed(1):null;
 
@@ -370,50 +379,54 @@ const BigKPI=({label,value,sub,color,trend})=>(<div style={{background:crd,borde
 const Tab0=({data,dedupUc,momData,execMetrics,subKpis,subStats,ppuStats,avgPpuBeforeSub})=>{
   if(!data.length)return<div style={{color:dm,padding:20}}>No data</div>;
   let totN=0,totBk=0,totNc=0;for(const d of data){totN+=d.n;totBk+=d.bk;totNc+=d.nc}
-  const last=data[data.length-1];const prev=data.length>1?data[data.length-2]:null;
-  const revMoM=prev?pctChg(last.n,prev.n):null;
-  const bkMoM=prev?pctChg(last.bk,prev.bk):null;
+  const fullData=data.filter(d=>!d.partial);
+  const last=fullData.length?fullData[fullData.length-1]:data[data.length-1];
+  const lastIdx=data.indexOf(last);const prev=lastIdx>0?data[lastIdx-1]:null;
+  const curPartial=data[data.length-1].partial?data[data.length-1]:null;
+  const revMoM=prev&&!prev.partial?pctChg(last.n,prev.n):null;
+  const bkMoM=prev&&!prev.partial?pctChg(last.bk,prev.bk):null;
   const revPerBk=sdiv(totN,totBk);
   const arpu=sdiv(totN,dedupUc);
   const subShare=totN>0?spct(data.reduce((a,d)=>a+d.sb,0),totN):0;
   const intv=data.length>14?2:0;
   // Mini sparkline data for revenue
-  const sparkData=data.map(d=>({l:d.l,v:d.n}));
+  const sparkData=data.map(d=>({l:d.l+(d.partial?" •":""),v:d.n}));
 
   return(<div style={{display:"flex",flexDirection:"column",gap:16}}>
     {/* Section: Revenue & Unit Economics */}
     <div style={{fontSize:11,color:am,fontWeight:600,textTransform:"uppercase",letterSpacing:1}}>Revenue & Unit Economics</div>
     <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-      <BigKPI label="Total Net Revenue" value={fmt(totN)} sub={data[0]?.l+" → "+last.l} color={gn}/>
-      <BigKPI label={last.l+" Revenue"} value={fmt(last.n)} trend={revMoM} sub="vs previous month" color={revMoM>=0?gn:rd}/>
-      <BigKPI label="ARR" value={fmt(last.n*12)} sub="annualized from latest month" color={bl}/>
+      <BigKPI label="Total Net Revenue" value={fmt(totN)} sub={data[0]?.l+" → "+data[data.length-1].l} color={gn}/>
+      <BigKPI label={last.l+" Revenue"} value={fmt(last.n)} trend={revMoM} sub={curPartial?"last full month · "+curPartial.l+" so far: "+fmt(curPartial.n):"vs previous month"} color={revMoM>=0?gn:rd}/>
+      <BigKPI label="ARR" value={fmt(last.n*12)} sub={"annualized from "+last.l+" (last full month)"} color={bl}/>
       <BigKPI label="Revenue / Booking" value={fmt(revPerBk)} sub="avg ticket size" color={pk}/>
       <BigKPI label="ARPU" value={fmt(arpu)} sub={dedupUc+" unique customers"} color={pu}/>
     </div>
 
     {/* Revenue trend mini chart */}
-    <Crd title="Revenue Trend"><ResponsiveContainer width="100%" height={180}><AreaChart data={sparkData}><defs><linearGradient id="rGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={gn} stopOpacity={0.3}/><stop offset="95%" stopColor={gn} stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="l" tick={{fill:dm,fontSize:9}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}} tickFormatter={fmt}/><Tooltip content={<CTip/>}/><Area type="monotone" dataKey="v" stroke={gn} strokeWidth={2.5} fill="url(#rGrad)" name="Net Revenue"/></AreaChart></ResponsiveContainer></Crd>
+    <Crd title={<span>Revenue Trend<DlBtn onClick={()=>downloadXlsx(data.map(d=>[d.l+(d.partial?" (partial)":""),Math.round(d.n),Math.round(d.g)]),["Month","Net Revenue","Gross Revenue"],"Awwzo_Revenue_Trend")}/></span>}><ResponsiveContainer width="100%" height={180}><AreaChart data={sparkData}><defs><linearGradient id="rGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={gn} stopOpacity={0.3}/><stop offset="95%" stopColor={gn} stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="l" tick={{fill:dm,fontSize:9}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}} tickFormatter={fmt}/><Tooltip content={<CTip/>}/><Area type="monotone" dataKey="v" stroke={gn} strokeWidth={2.5} fill="url(#rGrad)" name="Net Revenue"/></AreaChart></ResponsiveContainer></Crd>
 
     {/* Section: Growth */}
-    <div style={{fontSize:11,color:am,fontWeight:600,textTransform:"uppercase",letterSpacing:1}}>Growth</div>
+    <div style={{fontSize:11,color:am,fontWeight:600,textTransform:"uppercase",letterSpacing:1}}>Growth <span style={{color:dm,fontWeight:400}}>· based on {last.l} (last full month)</span></div>
     <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
       <BigKPI label="Revenue MoM" value={(revMoM!==null?(revMoM>0?"+":"")+revMoM+"%":"—")} color={revMoM>=0?gn:rd}/>
       <BigKPI label="Booking MoM" value={(bkMoM!==null?(bkMoM>0?"+":"")+bkMoM+"%":"—")} color={bkMoM>=0?gn:rd} sub={last.bk+" bookings in "+last.l}/>
-      <BigKPI label="New Customers" value={last.nc} sub={last.l} color={cy} trend={prev?pctChg(last.nc,prev.nc):null}/>
+      <BigKPI label="New Customers" value={last.nc} sub={last.l} color={cy} trend={prev&&!prev.partial?pctChg(last.nc,prev.nc):null}/>
       <BigKPI label="Revenue Mix" value={subShare+"%"} sub="subscription share" color={pu}/>
+      <BigKPI label="Revenue Concentration" value={execMetrics.top10Pct+"%"} sub="from top 10% customers (all-time)" color={execMetrics.top10Pct>60?rd:execMetrics.top10Pct>45?am:gn}/>
     </div>
 
     {/* Section: Retention & Stickiness */}
-    <div style={{fontSize:11,color:am,fontWeight:600,textTransform:"uppercase",letterSpacing:1}}>Retention & Stickiness</div>
+    <div style={{fontSize:11,color:am,fontWeight:600,textTransform:"uppercase",letterSpacing:1}}>Retention & Stickiness <span style={{color:dm,fontWeight:400}}>· all-time, not affected by date filter</span></div>
     <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
       <BigKPI label="90-Day Active Rate" value={spct(execMetrics.activeCount,execMetrics.totalCustomers)+"%"} sub={execMetrics.activeCount+" of "+execMetrics.totalCustomers+" customers"} color={gn}/>
       <BigKPI label="Repeat Rate" value={execMetrics.repeatRate+"%"} sub="customers with 2+ bookings" color={bl}/>
       <BigKPI label="Days to 2nd Booking" value={execMetrics.avgTtr?execMetrics.avgTtr+"d":"—"} sub="avg across all cohorts" color={execMetrics.avgTtr&&execMetrics.avgTtr<=14?gn:am}/>
-      <BigKPI label="Churn Rate" value={execMetrics.churnRatePct+"%"} sub="newly churned / active base" color={execMetrics.churnRatePct<=5?gn:execMetrics.churnRatePct<=15?am:rd}/>
+      <BigKPI label="Churn Rate" value={execMetrics.churnRatePct+"%"} sub="3-month avg · newly churned / active base" color={execMetrics.churnRatePct<=5?gn:execMetrics.churnRatePct<=15?am:rd}/>
     </div>
 
     {/* Section: Subscription Health */}
-    <div style={{fontSize:11,color:am,fontWeight:600,textTransform:"uppercase",letterSpacing:1}}>Subscription Health</div>
+    <div style={{fontSize:11,color:am,fontWeight:600,textTransform:"uppercase",letterSpacing:1}}>Subscription Health <span style={{color:dm,fontWeight:400}}>· all-time</span></div>
     <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
       <BigKPI label="Subscriber Penetration" value={subKpis.penetration+"%"} sub={subKpis.totalSubs+" subscribers"} color={pu}/>
       <BigKPI label="Subscriber Revenue Premium" value={ppuStats.avgRev>0?(subStats.avgRev/ppuStats.avgRev).toFixed(1)+"x":"—"} sub="vs PPU customers" color={gn}/>
@@ -423,21 +436,21 @@ const Tab0=({data,dedupUc,momData,execMetrics,subKpis,subStats,ppuStats,avgPpuBe
     {/* Section: Customer Quality */}
     <div style={{fontSize:11,color:am,fontWeight:600,textTransform:"uppercase",letterSpacing:1}}>Customer Quality</div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12}}>
-      <Crd title="LTV — All Time">
+      <Crd title={<span>LTV — All Time<DlBtn onClick={()=>downloadXlsx([["All Customers",execMetrics.ltvTiers.all],...[10,20,30,40,50].map(t=>["Top "+t+"%",execMetrics.ltvTiers["top"+t]])],["Segment","Avg LTV"],"Awwzo_LTV_Tiers")}/></span>}>
         <table><thead><tr style={{borderBottom:"1px solid "+bdr}}><th>Segment</th><th style={{textAlign:"right"}}>Avg LTV</th></tr></thead>
         <tbody>
           <tr style={{borderBottom:"1px solid "+bdr+"15"}}><td style={{color:tx,fontWeight:600}}>All Customers</td><td style={{textAlign:"right",color:gn,fontWeight:700,fontSize:14}}>{fmt(execMetrics.ltvTiers.all)}</td></tr>
           {[10,20,30,40,50].map(t=>(<tr key={t} style={{borderBottom:"1px solid "+bdr+"15"}}><td style={{color:am}}>Top {t}%</td><td style={{textAlign:"right",color:tx,fontWeight:600}}>{fmt(execMetrics.ltvTiers["top"+t])}</td></tr>))}
         </tbody></table>
       </Crd>
-      <Crd title={<span>Avg Residency / Pet<span style={{fontSize:9,color:dm,marginLeft:6}}>L12M: {execMetrics.l12Label}</span></span>}>
+      <Crd title={<span>Avg Residency / Pet<span style={{fontSize:9,color:dm,marginLeft:6}}>L12M: {execMetrics.l12Label}</span><DlBtn onClick={()=>downloadXlsx([["All Customers",execMetrics.resTiers.all],...[10,20,30,40,50].map(t=>["Top "+t+"%",execMetrics.resTiers["top"+t]])],["Segment","Avg Days"],"Awwzo_Residency_Tiers")}/></span>}>
         <table><thead><tr style={{borderBottom:"1px solid "+bdr}}><th>Segment</th><th style={{textAlign:"right"}}>Avg Days</th></tr></thead>
         <tbody>
           <tr style={{borderBottom:"1px solid "+bdr+"15"}}><td style={{color:tx,fontWeight:600}}>All Customers</td><td style={{textAlign:"right",color:bl,fontWeight:700,fontSize:14}}>{execMetrics.resTiers.all}</td></tr>
           {[10,20,30,40,50].map(t=>(<tr key={t} style={{borderBottom:"1px solid "+bdr+"15"}}><td style={{color:am}}>Top {t}%</td><td style={{textAlign:"right",color:tx,fontWeight:600}}>{execMetrics.resTiers["top"+t]}</td></tr>))}
         </tbody></table>
       </Crd>
-      <Crd title={<span>Avg Bookings / Pet<span style={{fontSize:9,color:dm,marginLeft:6}}>L12M: {execMetrics.l12Label}</span></span>}>
+      <Crd title={<span>Avg Bookings / Pet<span style={{fontSize:9,color:dm,marginLeft:6}}>L12M: {execMetrics.l12Label}</span><DlBtn onClick={()=>downloadXlsx([["All Customers",execMetrics.bkTiers.all],...[10,20,30,40,50].map(t=>["Top "+t+"%",execMetrics.bkTiers["top"+t]])],["Segment","Avg Bookings"],"Awwzo_Bookings_Tiers")}/></span>}>
         <table><thead><tr style={{borderBottom:"1px solid "+bdr}}><th>Segment</th><th style={{textAlign:"right"}}>Avg Bookings</th></tr></thead>
         <tbody>
           <tr style={{borderBottom:"1px solid "+bdr+"15"}}><td style={{color:tx,fontWeight:600}}>All Customers</td><td style={{textAlign:"right",color:cy,fontWeight:700,fontSize:14}}>{execMetrics.bkTiers.all}</td></tr>
@@ -456,6 +469,22 @@ const Tab1=({data,dedupUc,momData,churnData,seasonData,years})=>{
   const last=data[data.length-1];const intv=data.length>14?2:0;
   const mks=new Set(data.map(d=>d.mk));const fMom=momData.filter(m=>mks.has(m.mk));
   const fChurn=churnData.filter(c=>mks.has(c.mk));
+  // Quarterly aggregation (built from filtered monthly data, so date-range filter applies)
+  const nowQ=qtrKey(monthKey(new Date()));
+  const qMap={};
+  for(const d of data){const qk=qtrKey(d.mk);if(!qMap[qk])qMap[qk]={qk,ql:qtrLabel(qk),mCount:0,n:0,g:0,bk:0,nc:0,Bn:0,Dn:0,Pn:0,Gn:0,Sn:0,BnG:0,DnG:0,PnG:0,GnG:0,SnG:0,ids:new Set()};const q=qMap[qk];q.mCount++;q.n+=d.n;q.g+=d.g;q.bk+=d.bk;q.nc+=d.nc;q.Bn+=d.Bn;q.Dn+=d.Dn;q.Pn+=d.Pn;q.Gn+=d.Gn;q.Sn+=d.Sn;q.BnG+=d.BnG;q.DnG+=d.DnG;q.PnG+=d.PnG;q.GnG+=d.GnG;q.SnG+=d.SnG;for(const id of d.ids)q.ids.add(id)}
+  const qtrs=Object.values(qMap).sort((a,b)=>a.qk<b.qk?-1:1).map(q=>({...q,uc:q.ids.size,ret:q.ids.size-q.nc,partial:q.mCount<3||q.qk===nowQ}));
+  const qGrowth=qtrs.map((q,i)=>{
+    const prev=i>0?qtrs[i-1]:null;
+    const[qy,qn]=q.qk.split("-");const yoy=qtrs.find(x=>x.qk===(parseInt(qy)-1)+"-"+qn)||null;
+    const ok=b=>b&&!q.partial&&!b.partial;
+    return{...q,
+      revQoQ:ok(prev)?pctChg(q.n,prev.n):null,revYoY:ok(yoy)?pctChg(q.n,yoy.n):null,
+      bkQoQ:ok(prev)?pctChg(q.bk,prev.bk):null,bkYoY:ok(yoy)?pctChg(q.bk,yoy.bk):null,
+      ucQoQ:ok(prev)?pctChg(q.uc,prev.uc):null,ucYoY:ok(yoy)?pctChg(q.uc,yoy.uc):null,
+      ncQoQ:ok(prev)?pctChg(q.nc,prev.nc):null,ncYoY:ok(yoy)?pctChg(q.nc,yoy.nc):null};
+  });
+  const qIntv=0;
   const revPerBk=sdiv(totN,totBk);
   const lineColors=[am,bl,gn,pu,cy,pk,rd,og];
   return(<div style={{display:"flex",flexDirection:"column",gap:14}}>
@@ -467,23 +496,76 @@ const Tab1=({data,dedupUc,momData,churnData,seasonData,years})=>{
       <KPI label="New Customers" value={totNc} color={cy}/>
       <KPI label="Avg Net ARPU" value={fmt(sdiv(totN,dedupUc))} color={pu} sub={dedupUc+" unique customers"}/>
     </div>
-    <Crd title={<span>Monthly Revenue by Service</span>}>
+    {(()=>{const svc=[["Boarding",data.reduce((a,d)=>a+d.Bn,0),am],["Daycare",data.reduce((a,d)=>a+d.Dn,0),bl],["Play",data.reduce((a,d)=>a+d.Pn,0),gn],["Grooming",data.reduce((a,d)=>a+d.Gn,0),pk],["Subscription",data.reduce((a,d)=>a+d.Sn,0),pu]].filter(s=>s[1]>0);const svcTot=svc.reduce((a,s)=>a+s[1],0);return(
+    <Crd title={<span>Service Revenue Mix (selected period)<DlBtn onClick={()=>downloadXlsx(svc.map(s=>[s[0],Math.round(s[1]),spct(s[1],svcTot)+"%"]),["Service","Net Revenue","Share %"],"Awwzo_Service_Mix")}/></span>}>
+      <div style={{display:"flex",gap:20,alignItems:"center",flexWrap:"wrap"}}>
+        <div style={{width:180,height:180}}><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={svc.map(s=>({name:s[0],value:s[1]}))} dataKey="value" nameKey="name" innerRadius={48} outerRadius={80} paddingAngle={2}>{svc.map((s,i)=><Cell key={i} fill={s[2]}/>)}</Pie><Tooltip content={<CTip/>}/></PieChart></ResponsiveContainer></div>
+        <div style={{flex:1,minWidth:220,display:"flex",flexDirection:"column",gap:6}}>
+          {svc.sort((a,b)=>b[1]-a[1]).map(s=>(<div key={s[0]} style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{width:10,height:10,borderRadius:3,background:s[2],flexShrink:0}}></div>
+            <div style={{fontSize:12,color:tx,width:100}}>{s[0]}</div>
+            <div style={{flex:1,height:6,background:crd2,borderRadius:3,overflow:"hidden"}}><div style={{width:spct(s[1],svcTot)+"%",height:"100%",background:s[2],borderRadius:3}}></div></div>
+            <div style={{fontSize:12,color:tx,fontWeight:600,width:52,textAlign:"right"}}>{spct(s[1],svcTot)}%</div>
+            <div style={{fontSize:11,color:dm,width:70,textAlign:"right"}}>{fmt(s[1])}</div>
+          </div>))}
+        </div>
+      </div>
+    </Crd>)})()}
+    <Crd title={<span>Monthly Revenue by Service<DlBtn onClick={()=>downloadXlsx(data.map(d=>[d.l+(d.partial?" (partial)":""),Math.round(met==="net"?d.Bn:d.BnG),Math.round(met==="net"?d.Dn:d.DnG),Math.round(met==="net"?d.Pn:d.PnG),Math.round(met==="net"?d.Gn:d.GnG),Math.round(met==="net"?d.Sn:d.SnG),Math.round(met==="net"?d.n:d.g)]),["Month","Boarding","Daycare","Play","Grooming","Subscription","Total"],"Awwzo_Monthly_Revenue_By_Service")}/></span>}>
       <div style={{display:"flex",gap:4,marginBottom:8}}>{["net","gross"].map(m=>(<button key={m} onClick={()=>setMet(m)} style={{background:met===m?am+"18":"transparent",color:met===m?am:dm,border:"1px solid "+(met===m?am+"40":"transparent"),borderRadius:6,padding:"4px 12px",fontSize:11,fontWeight:500}}>{m==="net"?"Net":"Gross"}</button>))}</div>
       <ResponsiveContainer width="100%" height={300}>
-        <ComposedChart data={data.map(d=>({month:d.l,Boarding:met==="net"?d.Bn:d.BnG,Daycare:met==="net"?d.Dn:d.DnG,Play:met==="net"?d.Pn:d.PnG,Grooming:met==="net"?d.Gn:d.GnG,Subscription:met==="net"?d.Sn:d.SnG,Total:met==="net"?d.n:d.g}))}>
+        <ComposedChart data={data.map(d=>({month:d.l+(d.partial?" •":""),Boarding:met==="net"?d.Bn:d.BnG,Daycare:met==="net"?d.Dn:d.DnG,Play:met==="net"?d.Pn:d.PnG,Grooming:met==="net"?d.Gn:d.GnG,Subscription:met==="net"?d.Sn:d.SnG,Total:met==="net"?d.n:d.g}))}>
           <CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}} tickFormatter={fmt}/><Tooltip content={<CTip/>}/><Legend wrapperStyle={{fontSize:11}}/>
           <Bar dataKey="Boarding" stackId="1" fill={am} opacity={0.9}/><Bar dataKey="Daycare" stackId="1" fill={bl} opacity={0.9}/><Bar dataKey="Play" stackId="1" fill={gn} opacity={0.9}/><Bar dataKey="Grooming" stackId="1" fill={pk} opacity={0.9}/><Bar dataKey="Subscription" stackId="1" fill={pu} radius={[3,3,0,0]} opacity={0.9}/>
           <Line type="monotone" dataKey="Total" stroke="#FFFFFF" strokeWidth={3} dot={{r:3,fill:"#FFF"}} name="Total Revenue"/>
         </ComposedChart>
       </ResponsiveContainer>
+      <div style={{fontSize:9,color:dm,marginTop:4}}>• current month in progress — totals will grow until month end</div>
     </Crd>
     <Crd title={<span>MoM & YoY Growth Rates<DlBtn onClick={()=>downloadXlsx(fMom.map(m=>[m.l,Math.round(m.rev),m.revMoM||"",m.revYoY||"",m.bk,m.bkMoM||"",m.bkYoY||"",m.uc,m.ucMoM||"",m.ucYoY||""]),["Month","Revenue","Rev MoM%","Rev YoY%","Bookings","Bk MoM%","Bk YoY%","Customers","Cust MoM%","Cust YoY%"],"Awwzo_Growth_Rates")}/></span>}>
       <div style={{overflowX:"auto"}}><table>
         <thead><tr style={{borderBottom:"1px solid "+bdr}}><th>Month</th><th>Revenue</th><th style={{color:am}}>MoM</th><th style={{color:bl}}>YoY</th><th>Bookings</th><th style={{color:am}}>MoM</th><th style={{color:bl}}>YoY</th><th>Customers</th><th style={{color:am}}>MoM</th><th style={{color:bl}}>YoY</th></tr></thead>
-        <tbody>{fMom.map((m,i)=>(<tr key={i} style={{borderBottom:"1px solid "+bdr+"15"}}><td style={{color:tx,fontWeight:500}}>{m.l}</td><td style={{color:gn}}>{fmt(m.rev)}</td><td><ChgBadge v={m.revMoM}/></td><td><ChgBadge v={m.revYoY}/></td><td style={{color:cy}}>{m.bk}</td><td><ChgBadge v={m.bkMoM}/></td><td><ChgBadge v={m.bkYoY}/></td><td style={{color:pu}}>{m.uc}</td><td><ChgBadge v={m.ucMoM}/></td><td><ChgBadge v={m.ucYoY}/></td></tr>))}</tbody>
+        <tbody>{fMom.map((m,i)=>(<tr key={i} style={{borderBottom:"1px solid "+bdr+"15",opacity:m.partial?0.55:1}}><td style={{color:tx,fontWeight:500,whiteSpace:"nowrap"}}>{m.l}{m.partial&&<span style={{color:am,fontSize:9,marginLeft:4}}>• partial</span>}</td><td style={{color:gn}}>{fmt(m.rev)}</td><td><ChgBadge v={m.revMoM}/></td><td><ChgBadge v={m.revYoY}/></td><td style={{color:cy}}>{m.bk}</td><td><ChgBadge v={m.bkMoM}/></td><td><ChgBadge v={m.bkYoY}/></td><td style={{color:pu}}>{m.uc}</td><td><ChgBadge v={m.ucMoM}/></td><td><ChgBadge v={m.ucYoY}/></td></tr>))}</tbody>
       </table></div>
     </Crd>
-    <Crd title="Monthly Bookings and Revenue">
+    {/* ======== QUARTERLY VIEW ======== */}
+    <div style={{fontSize:11,color:am,fontWeight:600,textTransform:"uppercase",letterSpacing:1,marginTop:4}}>Quarterly View</div>
+    <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+      {(()=>{const fq=qtrs.filter(q=>!q.partial);const lq=fq.length?fq[fq.length-1]:null;const lqg=lq?qGrowth.find(g=>g.qk===lq.qk):null;return(<>
+        <KPI label="Last Full Quarter" value={lq?lq.ql:"-"} sub={lq?lq.mCount+" months":""} color={am}/>
+        <KPI label="Quarterly Revenue" value={lq?fmt(lq.n):"-"} sub={lqg&&lqg.revQoQ!==null?(lqg.revQoQ>=0?"+":"")+lqg.revQoQ+"% QoQ":""} color={gn}/>
+        <KPI label="Active Customers" value={lq?lq.uc:"-"} sub={lqg&&lqg.ucQoQ!==null?(lqg.ucQoQ>=0?"+":"")+lqg.ucQoQ+"% QoQ":""} color={pu}/>
+        <KPI label="New Customers" value={lq?lq.nc:"-"} sub={lqg&&lqg.ncQoQ!==null?(lqg.ncQoQ>=0?"+":"")+lqg.ncQoQ+"% QoQ":""} color={cy}/>
+        <KPI label="Returning" value={lq?lq.ret:"-"} sub={lq&&lq.uc>0?spct(lq.ret,lq.uc)+"% of active":""} color={bl}/>
+      </>)})()}
+    </div>
+    <Crd title={<span>Quarterly Revenue by Service<DlBtn onClick={()=>downloadXlsx(qtrs.map(q=>[q.ql+(q.partial?" (partial)":""),Math.round(met==="net"?q.Bn:q.BnG),Math.round(met==="net"?q.Dn:q.DnG),Math.round(met==="net"?q.Pn:q.PnG),Math.round(met==="net"?q.Gn:q.GnG),Math.round(met==="net"?q.Sn:q.SnG),Math.round(met==="net"?q.n:q.g)]),["Quarter","Boarding","Daycare","Play","Grooming","Subscription","Total"],"Awwzo_Quarterly_Revenue_By_Service")}/></span>}>
+      <ResponsiveContainer width="100%" height={280}>
+        <ComposedChart data={qtrs.map(q=>({q:q.ql+(q.partial?" •":""),Boarding:met==="net"?q.Bn:q.BnG,Daycare:met==="net"?q.Dn:q.DnG,Play:met==="net"?q.Pn:q.PnG,Grooming:met==="net"?q.Gn:q.GnG,Subscription:met==="net"?q.Sn:q.SnG,Total:met==="net"?q.n:q.g}))}>
+          <CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="q" tick={{fill:dm,fontSize:10}} interval={qIntv}/><YAxis tick={{fill:dm,fontSize:10}} tickFormatter={fmt}/><Tooltip content={<CTip/>}/><Legend wrapperStyle={{fontSize:11}}/>
+          <Bar dataKey="Boarding" stackId="1" fill={am} opacity={0.9}/><Bar dataKey="Daycare" stackId="1" fill={bl} opacity={0.9}/><Bar dataKey="Play" stackId="1" fill={gn} opacity={0.9}/><Bar dataKey="Grooming" stackId="1" fill={pk} opacity={0.9}/><Bar dataKey="Subscription" stackId="1" fill={pu} radius={[3,3,0,0]} opacity={0.9}/>
+          <Line type="monotone" dataKey="Total" stroke="#FFFFFF" strokeWidth={3} dot={{r:3,fill:"#FFF"}} name="Total Revenue"/>
+        </ComposedChart>
+      </ResponsiveContainer>
+      <div style={{fontSize:9,color:dm,marginTop:4}}>• partial quarter — in progress or truncated by the date filter. Growth badges are hidden for partial quarters.</div>
+    </Crd>
+    <Crd title={<span>QoQ &amp; YoY Growth Rates<DlBtn onClick={()=>downloadXlsx(qGrowth.map(q=>[q.ql+(q.partial?" (partial)":""),Math.round(q.n),q.revQoQ??"",q.revYoY??"",q.bk,q.bkQoQ??"",q.bkYoY??"",q.uc,q.ucQoQ??"",q.ucYoY??"",q.nc,q.ncQoQ??""]),["Quarter","Revenue","Rev QoQ%","Rev YoY%","Bookings","Bk QoQ%","Bk YoY%","Active Cust","Cust QoQ%","Cust YoY%","New Cust","New QoQ%"],"Awwzo_Quarterly_Growth")}/></span>}>
+      <div style={{overflowX:"auto"}}><table>
+        <thead><tr style={{borderBottom:"1px solid "+bdr}}><th>Quarter</th><th>Revenue</th><th style={{color:am}}>QoQ</th><th style={{color:bl}}>YoY</th><th>Bookings</th><th style={{color:am}}>QoQ</th><th style={{color:bl}}>YoY</th><th>Active</th><th style={{color:am}}>QoQ</th><th style={{color:bl}}>YoY</th><th>New</th><th style={{color:am}}>QoQ</th></tr></thead>
+        <tbody>{qGrowth.map((q,i)=>(<tr key={i} style={{borderBottom:"1px solid "+bdr+"15",opacity:q.partial?0.55:1}}><td style={{color:tx,fontWeight:500,whiteSpace:"nowrap"}}>{q.ql}{q.partial&&<span style={{color:am,fontSize:9,marginLeft:4}}>• partial</span>}</td><td style={{color:gn}}>{fmt(q.n)}</td><td><ChgBadge v={q.revQoQ}/></td><td><ChgBadge v={q.revYoY}/></td><td style={{color:cy}}>{q.bk}</td><td><ChgBadge v={q.bkQoQ}/></td><td><ChgBadge v={q.bkYoY}/></td><td style={{color:pu}}>{q.uc}</td><td><ChgBadge v={q.ucQoQ}/></td><td><ChgBadge v={q.ucYoY}/></td><td style={{color:cy}}>{q.nc}</td><td><ChgBadge v={q.ncQoQ}/></td></tr>))}</tbody>
+      </table></div>
+    </Crd>
+    <Crd title={<span>Quarterly Customers — New vs Returning<DlBtn onClick={()=>downloadXlsx(qtrs.map(q=>[q.ql+(q.partial?" (partial)":""),q.uc,q.nc,q.ret]),["Quarter","Active (unique)","New","Returning"],"Awwzo_Quarterly_Customers")}/></span>}>
+      <ResponsiveContainer width="100%" height={240}>
+        <ComposedChart data={qtrs.map(q=>({q:q.ql+(q.partial?" •":""),New:q.nc,Returning:q.ret,Active:q.uc}))}>
+          <CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="q" tick={{fill:dm,fontSize:10}} interval={qIntv}/><YAxis tick={{fill:dm,fontSize:10}}/><Tooltip content={<CTip/>}/><Legend wrapperStyle={{fontSize:11}}/>
+          <Bar dataKey="New" stackId="c" fill={cy} name="New Customers" opacity={0.9}/><Bar dataKey="Returning" stackId="c" fill={bl} name="Returning" radius={[3,3,0,0]} opacity={0.9}/>
+          <Line type="monotone" dataKey="Active" stroke={am} strokeWidth={2.5} name="Active (unique)" dot={{r:3,fill:am}}/>
+        </ComposedChart>
+      </ResponsiveContainer>
+      <div style={{fontSize:9,color:dm,marginTop:4}}>Active = unique customers with a booking in the quarter (deduplicated across months). New = first-ever booking in that quarter. Returning = Active − New.</div>
+    </Crd>
+    <Crd title={<span>Monthly Bookings and Revenue<DlBtn onClick={()=>downloadXlsx(data.map(d=>[d.l+(d.partial?" (partial)":""),d.ppuBk,d.subBk,d.bk,Math.round(d.ppuRev),Math.round(d.sb),Math.round(d.n)]),["Month","PPU Bookings","Sub Bookings","Total Bookings","PPU Revenue","Sub Revenue","Total Revenue"],"Awwzo_Monthly_Bookings_Revenue")}/></span>}>
       <ResponsiveContainer width="100%" height={280}>
         <ComposedChart data={data.map(d=>({month:d.l,PPU:d.ppuBk,Subscription:d.subBk,TotalRev:d.n,PPURev:d.ppuRev,SubRev:d.sb}))}>
           <CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis yAxisId="l" tick={{fill:dm,fontSize:10}}/><YAxis yAxisId="r" orientation="right" tick={{fill:dm,fontSize:10}} tickFormatter={fmt}/><Tooltip content={<CTip/>}/><Legend wrapperStyle={{fontSize:11}}/>
@@ -493,15 +575,15 @@ const Tab1=({data,dedupUc,momData,churnData,seasonData,years})=>{
       </ResponsiveContainer>
     </Crd>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-      <Crd title="Customer Acquisition"><ResponsiveContainer width="100%" height={220}><ComposedChart data={data.map(d=>({month:d.l,New:d.nc,Active:d.uc}))}><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}}/><Tooltip content={<CTip/>}/><Bar dataKey="New" fill={gn} name="New Customers" radius={[3,3,0,0]} opacity={0.85}/><Line type="monotone" dataKey="Active" stroke={am} strokeWidth={2.5} name="Unique Active" dot={{r:3}}/></ComposedChart></ResponsiveContainer></Crd>
+      <Crd title={<span>Customer Acquisition<DlBtn onClick={()=>downloadXlsx(data.map(d=>[d.l+(d.partial?" (partial)":""),d.nc,d.uc]),["Month","New Customers","Unique Active"],"Awwzo_Customer_Acquisition")}/></span>}><ResponsiveContainer width="100%" height={220}><ComposedChart data={data.map(d=>({month:d.l,New:d.nc,Active:d.uc}))}><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}}/><Tooltip content={<CTip/>}/><Bar dataKey="New" fill={gn} name="New Customers" radius={[3,3,0,0]} opacity={0.85}/><Line type="monotone" dataKey="Active" stroke={am} strokeWidth={2.5} name="Unique Active" dot={{r:3}}/></ComposedChart></ResponsiveContainer></Crd>
       <Crd title="Revenue MoM Growth %"><ResponsiveContainer width="100%" height={220}><ComposedChart data={fMom.filter(m=>m.revMoM!==null).map(m=>({month:m.l,MoM:m.revMoM}))}><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}} tickFormatter={v=>v+"%"}/><Tooltip content={<CTip/>}/><Bar dataKey="MoM" name="MoM %" radius={[3,3,0,0]}>{fMom.filter(m=>m.revMoM!==null).map((m,i)=><Cell key={i} fill={m.revMoM>=0?gn:rd}/>)}</Bar></ComposedChart></ResponsiveContainer></Crd>
     </div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-      <Crd title="Avg Residency per Active Customer"><ResponsiveContainer width="100%" height={220}><LineChart data={data.map(d=>({month:d.l,Residency:d.avgRes}))}><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}}/><Tooltip content={<CTip/>}/><Line type="monotone" dataKey="Residency" stroke={bl} strokeWidth={2.5} name="Avg Residency" dot={{r:3,fill:bl}}/></LineChart></ResponsiveContainer></Crd>
-      <Crd title="Churn & Reactivation"><ResponsiveContainer width="100%" height={220}><ComposedChart data={fChurn.filter(c=>c.churned+c.reactivated>0)}><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="l" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}}/><Tooltip content={<CTip/>}/><Legend wrapperStyle={{fontSize:11}}/><Bar dataKey="churned" fill={rd} name="Newly Churned" radius={[3,3,0,0]} opacity={0.8}/><Bar dataKey="reactivated" fill={gn} name="Reactivated" radius={[3,3,0,0]} opacity={0.8}/></ComposedChart></ResponsiveContainer></Crd>
+      <Crd title={<span>Avg Residency per Active Customer<DlBtn onClick={()=>downloadXlsx(data.map(d=>[d.l+(d.partial?" (partial)":""),d.avgRes]),["Month","Avg Residency (days)"],"Awwzo_Avg_Residency")}/></span>}><ResponsiveContainer width="100%" height={220}><LineChart data={data.map(d=>({month:d.l,Residency:d.avgRes}))}><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}}/><Tooltip content={<CTip/>}/><Line type="monotone" dataKey="Residency" stroke={bl} strokeWidth={2.5} name="Avg Residency" dot={{r:3,fill:bl}}/></LineChart></ResponsiveContainer></Crd>
+      <Crd title={<span>Churn &amp; Reactivation<DlBtn onClick={()=>downloadXlsx(fChurn.map(c=>[c.l,c.churned,c.reactivated]),["Month","Newly Churned","Reactivated"],"Awwzo_Churn_Reactivation")}/></span>}><ResponsiveContainer width="100%" height={220}><ComposedChart data={fChurn.filter(c=>c.churned+c.reactivated>0)}><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="l" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}}/><Tooltip content={<CTip/>}/><Legend wrapperStyle={{fontSize:11}}/><Bar dataKey="churned" fill={rd} name="Newly Churned" radius={[3,3,0,0]} opacity={0.8}/><Bar dataKey="reactivated" fill={gn} name="Reactivated" radius={[3,3,0,0]} opacity={0.8}/></ComposedChart></ResponsiveContainer></Crd>
     </div>
-    <Crd title="90-Day Active Rate"><ResponsiveContainer width="100%" height={220}><AreaChart data={data.map(d=>({month:d.l,Rate:d.activeRate90||0}))}><defs><linearGradient id="arGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={gn} stopOpacity={0.25}/><stop offset="95%" stopColor={gn} stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}} domain={[0,100]} tickFormatter={v=>v+"%"}/><Tooltip content={<CTip/>}/><Area type="monotone" dataKey="Rate" stroke={gn} strokeWidth={2.5} fill="url(#arGrad)" name="90d Active Rate" dot={{r:3,fill:gn}}/></AreaChart></ResponsiveContainer></Crd>
-    <Crd title="Seasonality - Revenue by Month (YoY)">
+    <Crd title={<span>90-Day Active Rate<DlBtn onClick={()=>downloadXlsx(data.map(d=>[d.l+(d.partial?" (partial)":""),d.activeRate90||0]),["Month","90d Active Rate %"],"Awwzo_90d_Active_Rate")}/></span>}><ResponsiveContainer width="100%" height={220}><AreaChart data={data.map(d=>({month:d.l,Rate:d.activeRate90||0}))}><defs><linearGradient id="arGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={gn} stopOpacity={0.25}/><stop offset="95%" stopColor={gn} stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}} domain={[0,100]} tickFormatter={v=>v+"%"}/><Tooltip content={<CTip/>}/><Area type="monotone" dataKey="Rate" stroke={gn} strokeWidth={2.5} fill="url(#arGrad)" name="90d Active Rate" dot={{r:3,fill:gn}}/></AreaChart></ResponsiveContainer></Crd>
+    <Crd title={<span>Seasonality - Revenue by Month (YoY)<DlBtn onClick={()=>downloadXlsx(seasonData.filter(s=>years.some(yr=>s["Rev"+yr]>0)).map(s=>[s.month,...years.map(yr=>Math.round(s["Rev"+yr]||0))]),["Month",...years],"Awwzo_Seasonality")}/></span>}>
       <ResponsiveContainer width="100%" height={250}>
         <BarChart data={seasonData.filter(s=>years.some(yr=>s["Rev"+yr]>0))}><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}}/><YAxis tick={{fill:dm,fontSize:10}} tickFormatter={fmt}/><Tooltip content={<CTip/>}/><Legend wrapperStyle={{fontSize:11}}/>
         {years.map((yr,yi)=><Bar key={yr} dataKey={"Rev"+yr} name={yr} fill={lineColors[yi%lineColors.length]} radius={[3,3,0,0]} opacity={0.85}/>)}
@@ -531,8 +613,8 @@ const Tab2=({lifecycle,rfmData,customerList,filteredCustomers,migration,migLabel
       <KPI label="Total Customers" value={tc} color={bl}/><KPI label="Reactivated" value={reactivatedCount} color={gn} sub="last period"/><KPI label="Avg PPU Before Sub" value={avgPpuBeforeSub} color={pu} sub="conversion funnel"/>
     </div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-      <Crd title="Lifecycle Segmentation"><div style={{display:"flex",gap:14}}><div style={{width:130}}><ResponsiveContainer width="100%" height={150}><PieChart><Pie data={lifecycle} cx="50%" cy="50%" outerRadius={60} innerRadius={32} dataKey="count" paddingAngle={2}>{lifecycle.map((e,i)=><Cell key={i} fill={phCol[e.phase]||dm}/>)}</Pie></PieChart></ResponsiveContainer></div><div style={{flex:1,display:"flex",flexDirection:"column",gap:7,justifyContent:"center"}}>{lifecycle.map(item=>{const p=tc>0?((item.count/tc)*100).toFixed(0):0;return(<div key={item.phase}><div style={{display:"flex",justifyContent:"space-between",fontSize:11}}><span><span style={{color:phCol[item.phase],fontWeight:700}}>{"\u25CF"} </span><span style={{color:tx}}>{item.phase}</span></span><span style={{color:dm}}>{item.count} ({p}%)</span></div><div style={{fontSize:10,color:dm}}>Avg {item.avg_bookings} bookings | {fmt(item.total_net)} rev</div></div>)})}</div></div></Crd>
-      <Crd title="RFM Segments"><ResponsiveContainer width="100%" height={190}><BarChart data={rfmData} layout="vertical"><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis type="number" tick={{fill:dm,fontSize:10}}/><YAxis type="category" dataKey="rfm" tick={{fill:dm,fontSize:10}} width={120}/><Tooltip content={<CTip/>}/><Bar dataKey="count" name="Customers" radius={[0,4,4,0]}>{rfmData.map((e,i)=><Cell key={i} fill={rfCol[e.rfm]||dm}/>)}</Bar></BarChart></ResponsiveContainer></Crd>
+      <Crd title={<span>Lifecycle Segmentation<DlBtn onClick={()=>downloadXlsx(lifecycle.map(l=>[l.phase,l.count,Math.round(l.total_net),l.avg_bookings]),["Phase","Customers","Total Net Revenue","Avg Bookings"],"Awwzo_Lifecycle")}/></span>}><div style={{display:"flex",gap:14}}><div style={{width:130}}><ResponsiveContainer width="100%" height={150}><PieChart><Pie data={lifecycle} cx="50%" cy="50%" outerRadius={60} innerRadius={32} dataKey="count" paddingAngle={2}>{lifecycle.map((e,i)=><Cell key={i} fill={phCol[e.phase]||dm}/>)}</Pie></PieChart></ResponsiveContainer></div><div style={{flex:1,display:"flex",flexDirection:"column",gap:7,justifyContent:"center"}}>{lifecycle.map(item=>{const p=tc>0?((item.count/tc)*100).toFixed(0):0;return(<div key={item.phase}><div style={{display:"flex",justifyContent:"space-between",fontSize:11}}><span><span style={{color:phCol[item.phase],fontWeight:700}}>{"\u25CF"} </span><span style={{color:tx}}>{item.phase}</span></span><span style={{color:dm}}>{item.count} ({p}%)</span></div><div style={{fontSize:10,color:dm}}>Avg {item.avg_bookings} bookings | {fmt(item.total_net)} rev</div></div>)})}</div></div></Crd>
+      <Crd title={<span>RFM Segments<DlBtn onClick={()=>downloadXlsx(rfmData.map(r=>[r.rfm,r.count,Math.round(r.total_net),Math.round(r.avg_net),r.avg_bookings]),["Segment","Customers","Total Net","Avg Net","Avg Bookings"],"Awwzo_RFM_Segments")}/></span>}><ResponsiveContainer width="100%" height={190}><BarChart data={rfmData} layout="vertical"><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis type="number" tick={{fill:dm,fontSize:10}}/><YAxis type="category" dataKey="rfm" tick={{fill:dm,fontSize:10}} width={120}/><Tooltip content={<CTip/>}/><Bar dataKey="count" name="Customers" radius={[0,4,4,0]}>{rfmData.map((e,i)=><Cell key={i} fill={rfCol[e.rfm]||dm}/>)}</Bar></BarChart></ResponsiveContainer></Crd>
     </div>
     {migration&&migration.length>0&&<Crd title={<span>{"Customer Migration: "+migLabel}<DlBtn onClick={()=>{const rows=migration.map(row=>[row.from,...row.to.map(t=>t.count)]);downloadXlsx(rows,["From \\ To",...ph],"Awwzo_Migration")}}/></span>}>
       <div style={{overflowX:"auto"}}><table>
@@ -541,7 +623,7 @@ const Tab2=({lifecycle,rfmData,customerList,filteredCustomers,migration,migLabel
       </table></div>
       <div style={{display:"flex",gap:12,marginTop:8,fontSize:10}}><span style={{color:gn}}>{"\u25A0"} Improved</span><span style={{color:bl}}>{"\u25A0"} Retained</span><span style={{color:rd}}>{"\u25A0"} Declined</span></div>
     </Crd>}
-    <Crd title="RFM Revenue Contribution"><div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>{rfmData.filter(r=>r.total_net>100000).map(r=>(<div key={r.rfm} style={{background:crd2,borderRadius:8,padding:10}}><div style={{fontSize:12,fontWeight:600,color:rfCol[r.rfm]||tx}}>{r.rfm}</div><div style={{fontSize:17,fontWeight:700,color:tx,marginTop:3}}>{fmt(r.total_net)}</div><div style={{fontSize:10,color:dm}}>{r.count} cust | Avg {fmt(r.avg_net)} | {r.avg_bookings} bookings</div></div>))}</div></Crd>
+    <Crd title={<span>RFM Revenue Contribution<DlBtn onClick={()=>downloadXlsx(rfmData.map(r=>[r.rfm,Math.round(r.total_net),Math.round(r.avg_net),r.count]),["Segment","Total Net","Avg Net","Customers"],"Awwzo_RFM_Revenue")}/></span>}><div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>{rfmData.filter(r=>r.total_net>100000).map(r=>(<div key={r.rfm} style={{background:crd2,borderRadius:8,padding:10}}><div style={{fontSize:12,fontWeight:600,color:rfCol[r.rfm]||tx}}>{r.rfm}</div><div style={{fontSize:17,fontWeight:700,color:tx,marginTop:3}}>{fmt(r.total_net)}</div><div style={{fontSize:10,color:dm}}>{r.count} cust | Avg {fmt(r.avg_net)} | {r.avg_bookings} bookings</div></div>))}</div></Crd>
     {filteredCustomers.length>0&&<Crd title={<span>Customers in Selected Period ({filteredCustomers.length})<DlBtn onClick={()=>downloadXlsx(sortedFc.map((t,i)=>[i+1,t.id,t.bk,t.res,Math.round(t.n)]),["#","Pet + Parent","Bookings","Residency","Net Revenue"],"Awwzo_Period_Customers")}/></span>}>
       <div style={{overflowX:"auto",maxHeight:400,overflowY:"auto"}}><table>
         <thead style={{position:"sticky",top:0,background:crd,zIndex:1}}><tr style={{borderBottom:"1px solid "+bdr}}>
@@ -593,8 +675,8 @@ const Tab3=({cohorts,monthlyRetention,filteredMonths,qtrlyCohorts,filteredQtrs})
         <div style={{display:"flex",gap:10,marginTop:8,fontSize:10}}><span><span style={{color:gn}}>{"\u25A0"}</span> 80%+</span><span><span style={{color:am}}>{"\u25A0"}</span> 60-79%</span><span><span style={{color:og}}>{"\u25A0"}</span> 40-59%</span><span><span style={{color:rd}}>{"\u25A0"}</span> 20-39%</span><span><span style={{color:dm}}>{"\u25A0"}</span> &lt;20%</span></div>
       </Crd>
       <Crd title={<span>Booking Depth<DlBtn onClick={()=>downloadXlsx(active.map(c=>[c.l,c.sz,spct(c.g2,c.sz)+"%",spct(c.g3,c.sz)+"%",spct(c.g5,c.sz)+"%",Math.round(c.net),Math.round(c.ltv),c.ttr||""]),["Cohort","Size","2+","3+","5+","Net Rev","LTV","Days to 2nd"],"Awwzo_Monthly_Booking_Depth")}/></span>}><div style={{overflowX:"auto"}}><table><thead><tr style={{borderBottom:"1px solid "+bdr}}>{["Cohort","Size","2+","3+","5+","Net Rev","LTV","Days to 2nd"].map(h=><th key={h} style={{whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead><tbody>{active.map((c,i)=>{const p2=spct(c.g2,c.sz),p3=spct(c.g3,c.sz),p5=spct(c.g5,c.sz);return(<tr key={i} style={{borderBottom:"1px solid "+bdr+"15"}}><td style={{color:tx,fontWeight:500}}>{c.l}</td><td style={{color:cy}}>{c.sz}</td><td style={{color:p2>=80?gn:p2>=60?am:rd}}>{p2}%</td><td style={{color:p3>=60?gn:p3>=40?am:rd}}>{p3}%</td><td style={{color:dm}}>{p5}%</td><td style={{color:gn}}>{fmt(c.net)}</td><td style={{color:am}}>{fmt(c.ltv)}</td><td style={{color:c.ttr&&c.ttr<=14?gn:am}}>{c.ttr?c.ttr+"d":"-"}</td></tr>)})}</tbody></table></div></Crd>
-      <Crd title="Repeat Curves - % Reaching 2nd Booking"><ResponsiveContainer width="100%" height={280}><LineChart data={active.map(c=>({month:c.l,D30:spct(c.d30,c.sz),D60:spct(c.d60,c.sz),D90:spct(c.d90,c.sz),D180:spct(c.d180,c.sz)}))}><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}} domain={[0,100]} tickFormatter={v=>v+"%"}/><Tooltip content={<CTip/>}/><Legend wrapperStyle={{fontSize:11}}/><Line type="monotone" dataKey="D30" stroke={gn} strokeWidth={2.5} name="By 30d" dot={{r:3}}/><Line type="monotone" dataKey="D60" stroke={bl} strokeWidth={2.5} name="By 60d" dot={{r:3}}/><Line type="monotone" dataKey="D90" stroke={am} strokeWidth={2.5} name="By 90d" dot={{r:3}}/><Line type="monotone" dataKey="D180" stroke={pu} strokeWidth={2.5} name="By 180d" dot={{r:3}}/></LineChart></ResponsiveContainer></Crd>
-      <Crd title="Cohort Summary"><div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4}}>{active.map(c=>(<div key={c.l} style={{background:crd2,borderRadius:8,padding:10,textAlign:"center",minWidth:95,flex:"0 0 auto"}}><div style={{fontSize:12,fontWeight:700,color:am}}>{c.l}</div><div style={{fontSize:10,color:dm,marginTop:2}}>{c.sz} new</div><div style={{fontSize:15,fontWeight:700,color:tx,marginTop:4}}>{spct(c.g2,c.sz)}%</div><div style={{fontSize:9,color:dm}}>repeated</div><div style={{fontSize:11,color:gn,marginTop:4}}>{fmt(c.ltv)}</div><div style={{fontSize:9,color:dm}}>LTV</div></div>))}</div></Crd>
+      <Crd title={<span>Repeat Curves - % Reaching 2nd Booking<DlBtn onClick={()=>downloadXlsx(active.map(c=>[c.l,c.sz,spct(c.d30,c.sz)+"%",spct(c.d60,c.sz)+"%",spct(c.d90,c.sz)+"%",spct(c.d180,c.sz)+"%"]),["Cohort","Size","By 30d","By 60d","By 90d","By 180d"],"Awwzo_Repeat_Curves")}/></span>}><ResponsiveContainer width="100%" height={280}><LineChart data={active.map(c=>({month:c.l,D30:spct(c.d30,c.sz),D60:spct(c.d60,c.sz),D90:spct(c.d90,c.sz),D180:spct(c.d180,c.sz)}))}><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={intv}/><YAxis tick={{fill:dm,fontSize:10}} domain={[0,100]} tickFormatter={v=>v+"%"}/><Tooltip content={<CTip/>}/><Legend wrapperStyle={{fontSize:11}}/><Line type="monotone" dataKey="D30" stroke={gn} strokeWidth={2.5} name="By 30d" dot={{r:3}}/><Line type="monotone" dataKey="D60" stroke={bl} strokeWidth={2.5} name="By 60d" dot={{r:3}}/><Line type="monotone" dataKey="D90" stroke={am} strokeWidth={2.5} name="By 90d" dot={{r:3}}/><Line type="monotone" dataKey="D180" stroke={pu} strokeWidth={2.5} name="By 180d" dot={{r:3}}/></LineChart></ResponsiveContainer></Crd>
+      <Crd title={<span>Cohort Summary<DlBtn onClick={()=>downloadXlsx(active.map(c=>[c.l,c.sz,spct(c.g2,c.sz)+"%",Math.round(c.ltv)]),["Cohort","New Customers","Repeated %","LTV"],"Awwzo_Cohort_Summary")}/></span>}><div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4}}>{active.map(c=>(<div key={c.l} style={{background:crd2,borderRadius:8,padding:10,textAlign:"center",minWidth:95,flex:"0 0 auto"}}><div style={{fontSize:12,fontWeight:700,color:am}}>{c.l}</div><div style={{fontSize:10,color:dm,marginTop:2}}>{c.sz} new</div><div style={{fontSize:15,fontWeight:700,color:tx,marginTop:4}}>{spct(c.g2,c.sz)}%</div><div style={{fontSize:9,color:dm}}>repeated</div><div style={{fontSize:11,color:gn,marginTop:4}}>{fmt(c.ltv)}</div><div style={{fontSize:9,color:dm}}>LTV</div></div>))}</div></Crd>
     </>}
     {view==="quarterly"&&<>
       <Crd title={<span>Quarterly Cohort Retention Heatmap<DlBtn onClick={()=>{const hdr=["Cohort","Size",...filteredQtrs.map(qtrLabel)];const rows=activeQ.map(c=>[c.ql,c.sz,...filteredQtrs.map(q=>c.retention[q]!==undefined?c.retention[q]+"%":"")]);downloadXlsx(rows,hdr,"Awwzo_Quarterly_Retention")}}/></span>}>
@@ -606,7 +688,7 @@ const Tab3=({cohorts,monthlyRetention,filteredMonths,qtrlyCohorts,filteredQtrs})
         <div style={{display:"flex",gap:10,marginTop:8,fontSize:10}}><span><span style={{color:gn}}>{"\u25A0"}</span> 80%+</span><span><span style={{color:am}}>{"\u25A0"}</span> 60-79%</span><span><span style={{color:og}}>{"\u25A0"}</span> 40-59%</span><span><span style={{color:rd}}>{"\u25A0"}</span> 20-39%</span><span><span style={{color:dm}}>{"\u25A0"}</span> &lt;20%</span></div>
       </Crd>
       <Crd title={<span>Quarterly Booking Depth<DlBtn onClick={()=>downloadXlsx(activeQ.map(c=>[c.ql,c.sz,spct(c.g2,c.sz)+"%",spct(c.g3,c.sz)+"%",spct(c.g5,c.sz)+"%",Math.round(c.net),Math.round(c.ltv),c.ttr||""]),["Cohort","Size","2+","3+","5+","Net Rev","LTV","Days to 2nd"],"Awwzo_Quarterly_Booking_Depth")}/></span>}><div style={{overflowX:"auto"}}><table><thead><tr style={{borderBottom:"1px solid "+bdr}}>{["Cohort","Size","2+","3+","5+","Net Rev","LTV","Days to 2nd"].map(h=><th key={h} style={{whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead><tbody>{activeQ.map((c,i)=>{const p2=spct(c.g2,c.sz),p3=spct(c.g3,c.sz),p5=spct(c.g5,c.sz);return(<tr key={i} style={{borderBottom:"1px solid "+bdr+"15"}}><td style={{color:tx,fontWeight:500}}>{c.ql}</td><td style={{color:cy}}>{c.sz}</td><td style={{color:p2>=80?gn:p2>=60?am:rd}}>{p2}%</td><td style={{color:p3>=60?gn:p3>=40?am:rd}}>{p3}%</td><td style={{color:dm}}>{p5}%</td><td style={{color:gn}}>{fmt(c.net)}</td><td style={{color:am}}>{fmt(c.ltv)}</td><td style={{color:c.ttr&&c.ttr<=14?gn:am}}>{c.ttr?c.ttr+"d":"-"}</td></tr>)})}</tbody></table></div></Crd>
-      <Crd title="Quarterly Cohort Summary"><div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4}}>{activeQ.map(c=>(<div key={c.ql} style={{background:crd2,borderRadius:8,padding:10,textAlign:"center",minWidth:100,flex:"0 0 auto"}}><div style={{fontSize:12,fontWeight:700,color:am}}>{c.ql}</div><div style={{fontSize:10,color:dm,marginTop:2}}>{c.sz} new</div><div style={{fontSize:15,fontWeight:700,color:tx,marginTop:4}}>{spct(c.g2,c.sz)}%</div><div style={{fontSize:9,color:dm}}>repeated</div><div style={{fontSize:11,color:gn,marginTop:4}}>{fmt(c.ltv)}</div><div style={{fontSize:9,color:dm}}>LTV</div></div>))}</div></Crd>
+      <Crd title={<span>Quarterly Cohort Summary<DlBtn onClick={()=>downloadXlsx(activeQ.map(c=>[c.ql,c.sz,spct(c.g2,c.sz)+"%",Math.round(c.ltv)]),["Cohort","New Customers","Repeated %","LTV"],"Awwzo_Quarterly_Cohort_Summary")}/></span>}><div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4}}>{activeQ.map(c=>(<div key={c.ql} style={{background:crd2,borderRadius:8,padding:10,textAlign:"center",minWidth:100,flex:"0 0 auto"}}><div style={{fontSize:12,fontWeight:700,color:am}}>{c.ql}</div><div style={{fontSize:10,color:dm,marginTop:2}}>{c.sz} new</div><div style={{fontSize:15,fontWeight:700,color:tx,marginTop:4}}>{spct(c.g2,c.sz)}%</div><div style={{fontSize:9,color:dm}}>repeated</div><div style={{fontSize:11,color:gn,marginTop:4}}>{fmt(c.ltv)}</div><div style={{fontSize:9,color:dm}}>LTV</div></div>))}</div></Crd>
     </>}
   </div>);
 };
@@ -627,7 +709,7 @@ const Tab4=({data,subKpis,ud,subStats,ppuStats,avgPpuBeforeSub,subRenewals,allMo
       <KPI label="Avg PPU Before Sub" value={avgPpuBeforeSub} color={cy} sub="conversion funnel"/>
     </div>
     {/* Renewal Section */}
-    <Crd title="Subscription Renewals">
+    <Crd title={<span>Subscription Renewals<DlBtn onClick={()=>downloadXlsx([["Total Sub Customers",sr.totalSubCustomers||0],["Renewed (2+ subs)",sr.renewalCount||0],["Renewal Rate %",sr.renewalRate||0],["Avg Days to Renew",sr.avgRenewalDays||0],["Median Days to Renew",sr.medianRenewalDays||0],["Total Renewal Events",sr.totalEvents||0],["Within 30 days",sr.ren30||0],["Within 90 days",sr.ren90||0],["Within 180 days",sr.ren180||0],["Within 365 days",sr.ren365||0],...Object.entries(sr.subCountDist||{}).map(([k,v])=>["Customers with "+k+" sub(s)",v])],["Metric","Value"],"Awwzo_Sub_Renewals")}/></span>}>
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:14}}>
         <div style={{background:crd2,borderRadius:8,padding:12,textAlign:"center"}}><div style={{fontSize:10,color:dm}}>Renewal Rate</div><div style={{fontSize:22,fontWeight:700,color:sr.renewalRate>=30?gn:sr.renewalRate>=15?am:rd}}>{sr.renewalRate||0}%</div><div style={{fontSize:9,color:dm}}>{sr.renewalCount||0} of {sr.totalSubCustomers||0} renewed</div></div>
         <div style={{background:crd2,borderRadius:8,padding:12,textAlign:"center"}}><div style={{fontSize:10,color:dm}}>Avg Days to Renew</div><div style={{fontSize:22,fontWeight:700,color:tx}}>{sr.avgRenewalDays||"—"}</div><div style={{fontSize:9,color:dm}}>payment to payment</div></div>
@@ -653,7 +735,7 @@ const Tab4=({data,subKpis,ud,subStats,ppuStats,avgPpuBeforeSub,subRenewals,allMo
       </div>
       {renByMo.length>0&&<div style={{marginTop:14}}><div style={{fontSize:11,color:dm,marginBottom:6}}>Renewals by Month</div><ResponsiveContainer width="100%" height={160}><BarChart data={renByMo}><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="l" tick={{fill:dm,fontSize:9}}/><YAxis tick={{fill:dm,fontSize:10}} allowDecimals={false}/><Tooltip content={<CTip/>}/><Bar dataKey="Renewals" fill={gn} name="Renewals" radius={[4,4,0,0]} opacity={0.85}/></BarChart></ResponsiveContainer></div>}
     </Crd>
-    <Crd title="Subscriber vs Pay-Per-Use Comparison">
+    <Crd title={<span>Subscriber vs Pay-Per-Use Comparison<DlBtn onClick={()=>downloadXlsx([["Customers",subStats.count,ppuStats.count],["Total Revenue",Math.round(subStats.totRev),Math.round(ppuStats.totRev)],["Avg Revenue",Math.round(subStats.avgRev),Math.round(ppuStats.avgRev)],["Avg Bookings",subStats.avgBk,ppuStats.avgBk],["90d Retention %",subStats.retPct,ppuStats.retPct]],["Metric","Subscribers","Pay-Per-Use"],"Awwzo_Sub_vs_PPU")}/></span>}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         <div style={{background:pu+"10",border:"1px solid "+pu+"30",borderRadius:8,padding:12}}>
           <div style={{fontSize:13,fontWeight:700,color:pu,marginBottom:8}}>Subscribers ({subStats.count})</div>
@@ -681,8 +763,8 @@ const Tab4=({data,subKpis,ud,subStats,ppuStats,avgPpuBeforeSub,subRenewals,allMo
       </div>}
     </Crd>
     <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:12}}>
-      <Crd title="Subscription Revenue and Share of Total"><ResponsiveContainer width="100%" height={260}><ComposedChart data={data.map(d=>({month:d.l,SubRev:d.sb,Share:spct(d.sb,d.n)}))}><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={data.length>14?2:0}/><YAxis yAxisId="l" tick={{fill:dm,fontSize:10}} tickFormatter={fmt}/><YAxis yAxisId="r" orientation="right" tick={{fill:dm,fontSize:10}} tickFormatter={v=>v+"%"} domain={[0,100]}/><Tooltip content={<CTip/>}/><Bar yAxisId="l" dataKey="SubRev" fill={pu} name="Sub Revenue" radius={[4,4,0,0]} opacity={0.85}/><Line yAxisId="r" type="monotone" dataKey="Share" stroke={gn} strokeWidth={3} name="% of Total" dot={{r:3,fill:gn}}/></ComposedChart></ResponsiveContainer></Crd>
-      <Crd title="Subscription Profile"><div style={{display:"flex",flexDirection:"column",gap:14,padding:"8px 0"}}><div><div style={{fontSize:11,color:dm,marginBottom:5}}>Service Split</div><div style={{display:"flex",gap:6}}>{Object.entries(subKpis.subFor).map(([k,v])=>(<div key={k} style={{background:crd2,borderRadius:8,padding:"8px 14px",flex:1,textAlign:"center"}}><div style={{fontSize:18,fontWeight:700,color:tx}}>{v}</div><div style={{fontSize:10,color:dm}}>{k}</div></div>))}</div></div><div><div style={{fontSize:11,color:dm,marginBottom:5}}>Usage Distribution</div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5}}><div style={{background:crd2,borderRadius:6,padding:7,textAlign:"center"}}><div style={{fontSize:15,fontWeight:700,color:gn}}>{ud.high}</div><div style={{fontSize:9,color:dm}}>High (10+)</div></div><div style={{background:crd2,borderRadius:6,padding:7,textAlign:"center"}}><div style={{fontSize:15,fontWeight:700,color:bl}}>{ud.medium}</div><div style={{fontSize:9,color:dm}}>Med (5-9)</div></div><div style={{background:crd2,borderRadius:6,padding:7,textAlign:"center"}}><div style={{fontSize:15,fontWeight:700,color:am}}>{ud.low}</div><div style={{fontSize:9,color:dm}}>Low (1-4)</div></div><div style={{background:crd2,borderRadius:6,padding:7,textAlign:"center"}}><div style={{fontSize:15,fontWeight:700,color:rd}}>{ud.zero}</div><div style={{fontSize:9,color:dm}}>None</div></div></div></div></div></Crd>
+      <Crd title={<span>Subscription Revenue and Share of Total<DlBtn onClick={()=>downloadXlsx(data.map(d=>[d.l+(d.partial?" (partial)":""),Math.round(d.sb),spct(d.sb,d.n)+"%"]),["Month","Sub Revenue","Share of Total %"],"Awwzo_Sub_Revenue_Share")}/></span>}><ResponsiveContainer width="100%" height={260}><ComposedChart data={data.map(d=>({month:d.l,SubRev:d.sb,Share:spct(d.sb,d.n)}))}><CartesianGrid strokeDasharray="3 3" stroke={grd}/><XAxis dataKey="month" tick={{fill:dm,fontSize:10}} interval={data.length>14?2:0}/><YAxis yAxisId="l" tick={{fill:dm,fontSize:10}} tickFormatter={fmt}/><YAxis yAxisId="r" orientation="right" tick={{fill:dm,fontSize:10}} tickFormatter={v=>v+"%"} domain={[0,100]}/><Tooltip content={<CTip/>}/><Bar yAxisId="l" dataKey="SubRev" fill={pu} name="Sub Revenue" radius={[4,4,0,0]} opacity={0.85}/><Line yAxisId="r" type="monotone" dataKey="Share" stroke={gn} strokeWidth={3} name="% of Total" dot={{r:3,fill:gn}}/></ComposedChart></ResponsiveContainer></Crd>
+      <Crd title={<span>Subscription Profile<DlBtn onClick={()=>downloadXlsx([...Object.entries(subKpis.subFor).map(([k,v])=>["Service: "+k,v]),["Usage High (10+ visits)",ud.high],["Usage Medium (5-9)",ud.medium],["Usage Low (1-4)",ud.low],["Usage None",ud.zero]],["Metric","Count"],"Awwzo_Sub_Profile")}/></span>}><div style={{display:"flex",flexDirection:"column",gap:14,padding:"8px 0"}}><div><div style={{fontSize:11,color:dm,marginBottom:5}}>Service Split</div><div style={{display:"flex",gap:6}}>{Object.entries(subKpis.subFor).map(([k,v])=>(<div key={k} style={{background:crd2,borderRadius:8,padding:"8px 14px",flex:1,textAlign:"center"}}><div style={{fontSize:18,fontWeight:700,color:tx}}>{v}</div><div style={{fontSize:10,color:dm}}>{k}</div></div>))}</div></div><div><div style={{fontSize:11,color:dm,marginBottom:5}}>Usage Distribution</div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5}}><div style={{background:crd2,borderRadius:6,padding:7,textAlign:"center"}}><div style={{fontSize:15,fontWeight:700,color:gn}}>{ud.high}</div><div style={{fontSize:9,color:dm}}>High (10+)</div></div><div style={{background:crd2,borderRadius:6,padding:7,textAlign:"center"}}><div style={{fontSize:15,fontWeight:700,color:bl}}>{ud.medium}</div><div style={{fontSize:9,color:dm}}>Med (5-9)</div></div><div style={{background:crd2,borderRadius:6,padding:7,textAlign:"center"}}><div style={{fontSize:15,fontWeight:700,color:am}}>{ud.low}</div><div style={{fontSize:9,color:dm}}>Low (1-4)</div></div><div style={{background:crd2,borderRadius:6,padding:7,textAlign:"center"}}><div style={{fontSize:15,fontWeight:700,color:rd}}>{ud.zero}</div><div style={{fontSize:9,color:dm}}>None</div></div></div></div></div></Crd>
     </div>
   </div>);
 };
@@ -691,14 +773,23 @@ const Tab4=({data,subKpis,ud,subStats,ppuStats,avgPpuBeforeSub,subRenewals,allMo
 const TABS=[{id:"exec",label:"Executive Summary",icon:"\uD83C\uDFAF"},{id:"overview",label:"Overview",icon:"\uD83D\uDCCA"},{id:"customers",label:"Customers",icon:"\uD83D\uDC65"},{id:"retention",label:"Retention",icon:"\uD83D\uDD04"},{id:"subscriptions",label:"Subscriptions",icon:"\uD83D\uDC8E"}];
 
 function Dashboard(){
-  const[tab,setTab]=useState("exec");const[si,setSi]=useState(0);const[ei,setEi]=useState(0);
+  const[tab,setTabRaw]=useState(()=>{try{return localStorage.getItem("awz_tab")||"exec"}catch(e){return"exec"}});
+  const setTab=t=>{setTabRaw(t);try{localStorage.setItem("awz_tab",t)}catch(e){}};
+  const[si,setSiRaw]=useState(0);const[ei,setEiRaw]=useState(0);
+  const setSi=v=>{setSiRaw(v);try{localStorage.setItem("awz_si",String(v))}catch(e){}};
+  const setEi=v=>{setEiRaw(v);try{localStorage.setItem("awz_ei",String(v))}catch(e){}};
   const[loading,setLoading]=useState(true);const[error,setError]=useState(null);const[allData,setAllData]=useState(null);const[lastRefresh,setLastRefresh]=useState(null);
 
   const loadData=()=>{setLoading(true);setError(null);
     Promise.all(Object.entries(URLS).map(([k,url])=>fetchCSV(url).then(d=>[k,d]))).then(results=>{
       const csvs={};for(const[k,d]of results)csvs[k]=d;
       const{records,subMeta}=processAllData(csvs);const computed=computeAll(records,subMeta);
-      setAllData(computed);setEi(computed.monthly.length-1);setLastRefresh(new Date().toLocaleTimeString());setLoading(false);
+      setAllData(computed);
+      const n=computed.monthly.length;
+      let rsi=0,rei=n-1;
+      try{const ss=parseInt(localStorage.getItem("awz_si"));const se=parseInt(localStorage.getItem("awz_ei"));if(!isNaN(ss)&&!isNaN(se)&&ss>=0&&se>ss&&se<n){rsi=ss;rei=se}}catch(e){}
+      setSiRaw(rsi);setEiRaw(rei);
+      setLastRefresh(new Date().toLocaleTimeString());setLoading(false);
     }).catch(e=>{setError(String(e.message||e));setLoading(false)})};
   useEffect(()=>{loadData()},[]);
 
@@ -762,7 +853,7 @@ function Dashboard(){
   if(!allData)return null;
 
   return(<div>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14,flexWrap:"wrap",gap:10}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14,flexWrap:"wrap",gap:10,position:"sticky",top:0,zIndex:50,background:bg,padding:"10px 0 10px",borderBottom:"1px solid "+bdr}}>
       <div><h1 style={{fontSize:22,fontWeight:700,letterSpacing:-0.5}}>{"\uD83D\uDC15"} Awwzo Dashboard <span style={{fontSize:10,color:gn,fontWeight:500,background:gn+"18",padding:"2px 8px",borderRadius:4,marginLeft:8}}>LIVE</span></h1><div style={{fontSize:11,color:dm,marginTop:2}}>{filtered.monthly[0]?.l||""} {"\u2192"} {filtered.monthly[filtered.monthly.length-1]?.l||""} ({filtered.monthly.length} months){lastRefresh&&<span style={{marginLeft:12}}>Refreshed: {lastRefresh}</span>}</div></div>
       <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
         <span style={{fontSize:11,color:dm}}>From</span><select value={si} onChange={ev=>setSi(Number(ev.target.value))}>{allData.monthly.map((m,i)=><option key={i} value={i}>{m.l}</option>)}</select>
