@@ -236,6 +236,13 @@ function computeAll(records,subMeta){
   const subBillingIds=new Set(records.filter(r=>r.service==="Subscription").map(r=>r.id));
   const subBookingIds=new Set(bookings.filter(r=>r.stay==="subscription").map(r=>r.id));
   const allSubIds=new Set([...subBillingIds,...subBookingIds]);
+  // Subscribers with subscription-stay visits but NO payment row in the Subscription sheet (data gap)
+  const subGapList=[...subBookingIds].filter(id=>!subBillingIds.has(id)).map(id=>{
+    const sv=bookings.filter(r=>r.id===id&&r.stay==="subscription");
+    const lastSv=sv.reduce((a,r)=>r.date>a?r.date:a,new Date(0));
+    const svcs=[...new Set(sv.map(r=>r.service))].join(", ");
+    return{id,visits:sv.length,services:svcs,lastVisit:lastSv.getTime()>0?lastSv.toLocaleDateString("en-IN"):""};
+  }).sort((a,b)=>b.visits-a.visits);
   const subBillingNet=records.filter(r=>r.service==="Subscription").reduce((a,r)=>a+r.net,0);
   // For each sub customer, count PPU bookings before their first sub billing
   let totalPpuBeforeSub=0,subConvCount=0;
@@ -246,6 +253,19 @@ function computeAll(records,subMeta){
     totalPpuBeforeSub+=ppuBefore;subConvCount++;
   }
   const avgPpuBeforeSub=subConvCount>0?+(totalPpuBeforeSub/subConvCount).toFixed(1):0;
+
+  // Multi-window active rates (15/30/45/60/90d) — excludes customers whose FIRST visit is inside the window
+  const activityWindows=[15,30,45,60,90].map(w=>{
+    const seg={All:{active:0,base:0},Subscribers:{active:0,base:0},PPU:{active:0,base:0}};
+    for(const id of allCustomers){
+      const fb=firstBooking[id];const lb=lastBooking[id];if(!fb||!lb)continue;
+      if((now-fb)/864e5<=w)continue; // new within this window — not yet retainable, excluded
+      const s=allSubIds.has(id)?"Subscribers":"PPU";
+      seg.All.base++;seg[s].base++;
+      if((now-lb)/864e5<=w){seg.All.active++;seg[s].active++}
+    }
+    return{w,...seg};
+  });
 
   // Subscription renewals: group sub billing records by customer, sorted by payment date
   const subsByCustomer={};
@@ -277,7 +297,7 @@ function computeAll(records,subMeta){
   // Sub count distribution
   const subCountDist={1:0,2:0,3:0,"4+":0};
   for(const[,subs]of Object.entries(subsByCustomer)){const c=subs.length;if(c===1)subCountDist[1]++;else if(c===2)subCountDist[2]++;else if(c===3)subCountDist[3]++;else subCountDist["4+"]++}
-  const subRenewals={totalSubCustomers,renewalCount,renewalRate,avgRenewalDays:+avgRenewalDays,medianRenewalDays,ren30,ren90,ren180,ren365,totalEvents:renewalGaps.length,renewalsByMonth,subCountDist};
+  const subRenewals={totalSubCustomers,renewalCount,renewalRate,avgRenewalDays:+avgRenewalDays,medianRenewalDays,ren30,ren90,ren180,ren365,totalEvents:renewalGaps.length,renewalsByMonth,subCountDist,subGapList};
 
   // Seasonality data (group by month number across years)
   const seasonality={};
@@ -350,7 +370,7 @@ function computeAll(records,subMeta){
   return{monthly,cohorts,monthlyRetention,allMonths,lifecycle,rfmData,customerList,churnByMonth,
     qtrlyCohorts,allQtrs,momData,buildMigration,seasonData,years,avgPpuBeforeSub,
     records,bookings,allSubIds,allCustomers,firstBooking,lastBooking,bookingCounts,totalSpend,residency,
-    execMetrics:{repeatRate,avgLtv,top10Pct,churnRatePct,avgTtr,totalCustomers,activeCount,monthlyArpu,ltvTiers,resTiers,bkTiers,l12Label:l12Months.length>0?monthLabel(l12Months[l12Months.length-1])+" → "+monthLabel(l12Months[0]):""},
+    execMetrics:{repeatRate,avgLtv,top10Pct,churnRatePct,avgTtr,totalCustomers,activeCount,monthlyArpu,ltvTiers,resTiers,bkTiers,activityWindows,l12Label:l12Months.length>0?monthLabel(l12Months[l12Months.length-1])+" → "+monthLabel(l12Months[0]):""},
     subKpis:{totalSubs:allSubIds.size,penetration:spct(allSubIds.size,allCustomers.length),totalNet:Math.round(subBillingNet),avgSubValue:sdiv(subBillingNet,allSubIds.size),subFor:subForMap},ud,subRenewals};
 }
 
@@ -424,6 +444,25 @@ const Tab0=({data,dedupUc,momData,execMetrics,subKpis,subStats,ppuStats,avgPpuBe
       <BigKPI label="Days to 2nd Booking" value={execMetrics.avgTtr?execMetrics.avgTtr+"d":"—"} sub="avg across all cohorts" color={execMetrics.avgTtr&&execMetrics.avgTtr<=14?gn:am}/>
       <BigKPI label="Churn Rate" value={execMetrics.churnRatePct+"%"} sub="3-month avg · newly churned / active base" color={execMetrics.churnRatePct<=5?gn:execMetrics.churnRatePct<=15?am:rd}/>
     </div>
+
+    <Crd title={<span>Active Customers by Window — All vs Subscribers vs Pay-Per-Use<DlBtn onClick={()=>downloadXlsx(execMetrics.activityWindows.map(a=>["Last "+a.w+" days",a.All.active,a.All.base,spct(a.All.active,a.All.base)+"%",a.Subscribers.active,a.Subscribers.base,spct(a.Subscribers.active,a.Subscribers.base)+"%",a.PPU.active,a.PPU.base,spct(a.PPU.active,a.PPU.base)+"%"]),["Window","All Active","All Base","All Rate","Sub Active","Sub Base","Sub Rate","PPU Active","PPU Base","PPU Rate"],"Awwzo_Active_By_Window")}/></span>}>
+      <div style={{overflowX:"auto"}}><table>
+        <thead>
+          <tr style={{borderBottom:"1px solid "+bdr}}><th rowSpan={2} style={{verticalAlign:"bottom"}}>Window</th><th colSpan={3} style={{textAlign:"center",color:tx,borderBottom:"1px solid "+bdr}}>All Customers</th><th colSpan={3} style={{textAlign:"center",color:pu,borderBottom:"1px solid "+bdr}}>Subscribers</th><th colSpan={3} style={{textAlign:"center",color:og,borderBottom:"1px solid "+bdr}}>Pay-Per-Use</th></tr>
+          <tr style={{borderBottom:"1px solid "+bdr}}><th style={{textAlign:"right"}}>Active</th><th style={{textAlign:"right"}}>Base</th><th style={{textAlign:"right"}}>Rate</th><th style={{textAlign:"right"}}>Active</th><th style={{textAlign:"right"}}>Base</th><th style={{textAlign:"right"}}>Rate</th><th style={{textAlign:"right"}}>Active</th><th style={{textAlign:"right"}}>Base</th><th style={{textAlign:"right"}}>Rate</th></tr>
+        </thead>
+        <tbody>{execMetrics.activityWindows.map((a,i)=>{
+          const rc=v=>v>=60?gn:v>=35?am:rd;
+          const ar=spct(a.All.active,a.All.base),sr2=spct(a.Subscribers.active,a.Subscribers.base),pr=spct(a.PPU.active,a.PPU.base);
+          return(<tr key={i} style={{borderBottom:"1px solid "+bdr+"15"}}>
+            <td style={{color:tx,fontWeight:600,whiteSpace:"nowrap"}}>Last {a.w} days</td>
+            <td style={{textAlign:"right",color:tx,fontWeight:600}}>{a.All.active}</td><td style={{textAlign:"right",color:dm}}>{a.All.base}</td><td style={{textAlign:"right",color:rc(ar),fontWeight:700}}>{ar}%</td>
+            <td style={{textAlign:"right",color:tx,fontWeight:600}}>{a.Subscribers.active}</td><td style={{textAlign:"right",color:dm}}>{a.Subscribers.base}</td><td style={{textAlign:"right",color:rc(sr2),fontWeight:700}}>{sr2}%</td>
+            <td style={{textAlign:"right",color:tx,fontWeight:600}}>{a.PPU.active}</td><td style={{textAlign:"right",color:dm}}>{a.PPU.base}</td><td style={{textAlign:"right",color:rc(pr),fontWeight:700}}>{pr}%</td>
+          </tr>)})}</tbody>
+      </table></div>
+      <div style={{fontSize:9,color:dm,marginTop:6}}>Active = last visit within the window, as of today. Base excludes dogs whose first-ever visit falls inside the window (too new to measure retention). Subscribers = ever had a subscription. Not affected by the date filter.</div>
+    </Crd>
 
     {/* Section: Subscription Health */}
     <div style={{fontSize:11,color:am,fontWeight:600,textTransform:"uppercase",letterSpacing:1}}>Subscription Health <span style={{color:dm,fontWeight:400}}>· all-time</span></div>
@@ -709,7 +748,7 @@ const Tab4=({data,subKpis,ud,subStats,ppuStats,avgPpuBeforeSub,subRenewals,allMo
       <KPI label="Avg PPU Before Sub" value={avgPpuBeforeSub} color={cy} sub="conversion funnel"/>
     </div>
     {/* Renewal Section */}
-    <Crd title={<span>Subscription Renewals<DlBtn onClick={()=>downloadXlsx([["Total Sub Customers",sr.totalSubCustomers||0],["Renewed (2+ subs)",sr.renewalCount||0],["Renewal Rate %",sr.renewalRate||0],["Avg Days to Renew",sr.avgRenewalDays||0],["Median Days to Renew",sr.medianRenewalDays||0],["Total Renewal Events",sr.totalEvents||0],["Within 30 days",sr.ren30||0],["Within 90 days",sr.ren90||0],["Within 180 days",sr.ren180||0],["Within 365 days",sr.ren365||0],...Object.entries(sr.subCountDist||{}).map(([k,v])=>["Customers with "+k+" sub(s)",v])],["Metric","Value"],"Awwzo_Sub_Renewals")}/></span>}>
+    <Crd title={<span>Subscription Renewals<DlBtn onClick={()=>downloadXlsx([["Total Sub Customers",sr.totalSubCustomers||0],["Renewed (2+ subs)",sr.renewalCount||0],["Renewal Rate %",sr.renewalRate||0],["Avg Days to Renew",sr.avgRenewalDays||0],["Median Days to Renew",sr.medianRenewalDays||0],["Total Renewal Events",sr.totalEvents||0],["Within 30 days",sr.ren30||0],["Within 90 days",sr.ren90||0],["Within 180 days",sr.ren180||0],["Within 365 days",sr.ren365||0],...Object.entries(sr.subCountDist||{}).map(([k,v])=>["Customers with "+k+" sub(s)",v])],["Metric","Value"],"Awwzo_Sub_Renewals")}/>{subKpis.totalSubs>sr.totalSubCustomers&&<span style={{fontSize:9,color:am,fontWeight:400,marginLeft:8}}>{"\u26A0"} {subKpis.totalSubs-sr.totalSubCustomers} of {subKpis.totalSubs} subscribers have subscription visits but no payment row in the Subscription sheet — renewal metrics use payment records only ({sr.totalSubCustomers})<button onClick={()=>downloadXlsx((sr.subGapList||[]).map((g,i)=>[i+1,g.id,g.visits,g.services,g.lastVisit]),["#","Pet + Parent","Sub Visits","Services","Last Visit"],"Awwzo_Missing_Sub_Payments")} style={{background:am+"15",color:am,border:"1px solid "+am+"30",borderRadius:5,padding:"2px 8px",fontSize:9,fontWeight:600,marginLeft:6}}>{"\u2B07"} Download list</button></span>}</span>}>
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:14}}>
         <div style={{background:crd2,borderRadius:8,padding:12,textAlign:"center"}}><div style={{fontSize:10,color:dm}}>Renewal Rate</div><div style={{fontSize:22,fontWeight:700,color:sr.renewalRate>=30?gn:sr.renewalRate>=15?am:rd}}>{sr.renewalRate||0}%</div><div style={{fontSize:9,color:dm}}>{sr.renewalCount||0} of {sr.totalSubCustomers||0} renewed</div></div>
         <div style={{background:crd2,borderRadius:8,padding:12,textAlign:"center"}}><div style={{fontSize:10,color:dm}}>Avg Days to Renew</div><div style={{fontSize:22,fontWeight:700,color:tx}}>{sr.avgRenewalDays||"—"}</div><div style={{fontSize:9,color:dm}}>payment to payment</div></div>
