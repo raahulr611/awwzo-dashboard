@@ -166,18 +166,6 @@ function computeAll(records,subMeta){
     return{q:cq,ql:qtrLabel(cq),sz,retention,g2,g3,g5,net:Math.round(cnet),ltv:sz>0?Math.round(cnet/sz):0,ttr:ttrC>0?+(ttrSum/ttrC).toFixed(1):null};
   });
 
-  // Fiscal quarterly cohorts (Indian FY, Q1=Apr-Jun) — for investor report
-  const fullMks=allMonths.filter(mk=>mk!==nowMkP);
-  const monthsPerFq={};for(const mk of fullMks){const q=fqKey(mk);monthsPerFq[q]=(monthsPerFq[q]||0)+1}
-  const firstFq={};for(const[id,d]of Object.entries(firstBooking))firstFq[id]=fqKey(monthKey(d));
-  const allFqs=[...new Set(fullMks.map(fqKey))].sort();
-  const fqCohorts=allFqs.map(fq=>{
-    const cids=Object.entries(firstFq).filter(([,q])=>q===fq).map(([id])=>id);const sz=cids.length;
-    let g2=0,g3=0,cnet=0,ttrSum=0,ttrC=0;
-    for(const id of cids){const vc=bookingCounts[id]||0;if(vc>=2)g2++;if(vc>=3)g3++;cnet+=totalSpend[id]||0;const tt=ttrDays[id];if(tt!==undefined){ttrSum+=tt;ttrC++}}
-    return{q:fq,ql:fqLabel(fq),sz,g2,g3,net:Math.round(cnet),ltv:sz>0?Math.round(cnet/sz):0,ttr:ttrC>0?+(ttrSum/ttrC).toFixed(1):null,full:monthsPerFq[fq]===3};
-  });
-
   // MoM/YoY (growth suppressed when either side is a partial month)
   const momData=monthly.map((m,i)=>{
     const prev=i>0?monthly[i-1]:null;const yoyIdx=monthly.findIndex(x=>{const[cy2,cm]=m.mk.split("-");return x.mk===(parseInt(cy2)-1)+"-"+cm});const yoy=yoyIdx>=0?monthly[yoyIdx]:null;
@@ -190,6 +178,19 @@ function computeAll(records,subMeta){
   for(const r of bookings){if(!lastBooking[r.id]||r.date>lastBooking[r.id])lastBooking[r.id]=r.date}
   const allCustomers=Object.keys(firstBooking);
   const totalSpend={};for(const r of records){totalSpend[r.id]=(totalSpend[r.id]||0)+r.net}
+
+  // Fiscal quarterly cohorts (Indian FY, Q1=Apr-Jun) — for investor report
+  const fullMks=allMonths.filter(mk=>mk!==nowMkP);
+  const monthsPerFq={};for(const mk of fullMks){const q=fqKey(mk);monthsPerFq[q]=(monthsPerFq[q]||0)+1}
+  const firstFq={};for(const[id,d]of Object.entries(firstBooking))firstFq[id]=fqKey(monthKey(d));
+  const allFqs=[...new Set(fullMks.map(fqKey))].sort();
+  const fqCohorts=allFqs.map(fq=>{
+    const cids=Object.entries(firstFq).filter(([,q])=>q===fq).map(([id])=>id);const sz=cids.length;
+    let g2=0,g3=0,cnet=0,ttrSum=0,ttrC=0;
+    for(const id of cids){const vc=bookingCounts[id]||0;if(vc>=2)g2++;if(vc>=3)g3++;cnet+=totalSpend[id]||0;const tt=ttrDays[id];if(tt!==undefined){ttrSum+=tt;ttrC++}}
+    return{q:fq,ql:fqLabel(fq),sz,g2,g3,net:Math.round(cnet),ltv:sz>0?Math.round(cnet/sz):0,ttr:ttrC>0?+(ttrSum/ttrC).toFixed(1):null,full:monthsPerFq[fq]===3};
+  });
+
 
   // Precompute sorted booking dates per customer (used by getPhase — avoids O(bookings) scan per call)
   const phaseDates={};for(const r of bookings){if(!phaseDates[r.id])phaseDates[r.id]=[];phaseDates[r.id].push(r.date)}
