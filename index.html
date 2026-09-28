@@ -231,12 +231,6 @@ function computeAll(records,subMeta){
   for(const id of allCustomers){const rec=(now-lastBooking[id])/864e5;const R=rScore(rec),F=fScore(bookingCounts[id]||0),M=mScore(totalSpend[id]||0);let seg;if(R>=4&&F>=4&&M>=4)seg="Champion";else if(R>=4&&F>=3)seg="Loyal";else if(R>=3&&F>=2&&M>=3)seg="Potential Loyalist";else if(R<=2&&F>=3)seg="At Risk";else if(R<=2&&F<=2)seg="Hibernating";else seg="Others";if(!rfmMap[seg])rfmMap[seg]=[];rfmMap[seg].push(id)}
   const rfmData=Object.entries(rfmMap).map(([rfm,ids])=>({rfm,count:ids.length,total_net:Math.round(ids.reduce((a,id)=>a+(totalSpend[id]||0),0)),avg_net:Math.round(ids.reduce((a,id)=>a+(totalSpend[id]||0),0)/ids.length),avg_bookings:+(ids.reduce((a,id)=>a+(bookingCounts[id]||0),0)/ids.length).toFixed(1)})).sort((a,b)=>b.total_net-a.total_net);
 
-  // All customers
-  const customerList=Object.keys(totalSpend).map(id=>{
-    const rec=lastBooking[id]?(now-lastBooking[id])/864e5:9999;const dsf=firstBooking[id]?(now-firstBooking[id])/864e5:9999;
-    let p;if(!firstBooking[id])p="Sub Only";else if(dsf<=30)p="New";else if(rec<90)p="Active";else if(rec<180)p="Dormant";else if(rec<=365)p="At Risk";else p="Churned";
-    return{id,bk:bookingCounts[id]||0,n:Math.round(totalSpend[id]||0),p,res:residency[id]||0};
-  }).sort((a,b)=>b.n-a.n);
 
   function buildMigration(fromMk,toMk){
     const ph=["New","Active","Dormant","At Risk","Churned"];
@@ -286,6 +280,23 @@ function computeAll(records,subMeta){
   const subsByCustomer={};
   for(const r of records){if(r.service==="Subscription"){if(!subsByCustomer[r.id])subsByCustomer[r.id]=[];subsByCustomer[r.id].push({date:r.date,net:r.net,mk:r.mk,start:r.subStart,end:r.subEnd})}}
   for(const id in subsByCustomer)subsByCustomer[id].sort((a,b)=>a.date-b.date);
+
+  // All customers — enriched with subscription type & dates
+  const customerList=Object.keys(totalSpend).map(id=>{
+    const rec=lastBooking[id]?(now-lastBooking[id])/864e5:9999;const dsf=firstBooking[id]?(now-firstBooking[id])/864e5:9999;
+    let p;if(!firstBooking[id])p="Sub Only";else if(dsf<=30)p="New";else if(rec<90)p="Active";else if(rec<180)p="Dormant";else if(rec<=365)p="At Risk";else p="Churned";
+    const subs=subsByCustomer[id]||[];
+    const isSub=allSubIds.has(id);
+    const lb=lastBooking[id]||null;
+    const fs=subs.length?subs[0].date:null;
+    const lr=subs.length>=2?subs[subs.length-1].date:null;
+    const curSub=subs.length?subs[subs.length-1]:null;
+    const nr=curSub&&curSub.end?curSub.end:null;
+    return{id,bk:bookingCounts[id]||0,n:Math.round(totalSpend[id]||0),p,res:residency[id]||0,
+      type:isSub?"Subscription":"Pay Per Use",typeN:isSub?1:0,subCount:subs.length,
+      lb,lbT:lb?lb.getTime():0,fs,fsT:fs?fs.getTime():0,lr,lrT:lr?lr.getTime():0,nr,nrT:nr?nr.getTime():0};
+  }).sort((a,b)=>b.n-a.n);
+
   const totalSubCustomers=Object.keys(subsByCustomer).length;
   const renewedCustomers=Object.entries(subsByCustomer).filter(([,subs])=>subs.length>=2);
   const renewalCount=renewedCustomers.length;
@@ -665,13 +676,15 @@ const Tab1=({data,dedupUc,momData,churnData,seasonData,years})=>{
 // ═══ TAB 2: CUSTOMERS ═══
 const Tab2=({lifecycle,rfmData,customerList,filteredCustomers,migration,migLabel,reactivatedCount,avgPpuBeforeSub})=>{
   const[custSort,setCustSort]=useState("n");const[custDir,setCustDir]=useState(-1);
-  const[search,setSearch]=useState("");const[phaseFilter,setPhaseFilter]=useState("All");
+  const[search,setSearch]=useState("");const[phaseFilter,setPhaseFilter]=useState("All");const[typeFilter,setTypeFilter]=useState("All");
+  const fd=d=>d?d.toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"2-digit"}):"\u2014";
+  const nowT=Date.now();
   const[fcSort,setFcSort]=useState("n");const[fcDir,setFcDir]=useState(-1);
   const tc=lifecycle.reduce((a,b)=>a+b.count,0);
   const ph=["New","Active","Dormant","At Risk","Churned"];
   const allPhases=["All",...ph,"Sub Only"];
   // Lifetime table
-  const filtList=customerList.filter(t=>{if(phaseFilter!=="All"&&t.p!==phaseFilter)return false;if(search&&!t.id.toLowerCase().includes(search.toLowerCase()))return false;return true});
+  const filtList=customerList.filter(t=>{if(phaseFilter!=="All"&&t.p!==phaseFilter)return false;if(typeFilter!=="All"&&t.type!==typeFilter)return false;if(search&&!t.id.toLowerCase().includes(search.toLowerCase()))return false;return true});
   const sorted=[...filtList].sort((a,b)=>custDir*(a[custSort]-b[custSort])||b.n-a.n);
   const doSort=key=>{if(custSort===key)setCustDir(d=>d*-1);else{setCustSort(key);setCustDir(-1)}};
   // Filtered table
@@ -704,20 +717,34 @@ const Tab2=({lifecycle,rfmData,customerList,filteredCustomers,migration,migLabel
         <tbody>{sortedFc.map((t,i)=>(<tr key={i} style={{borderBottom:"1px solid "+bdr+"20"}}><td style={{color:dm}}>{i+1}</td><td style={{color:tx,fontWeight:500}}>{t.id}</td><td style={{color:cy}}>{t.bk}</td><td style={{color:bl,fontWeight:600}}>{t.res}</td><td style={{color:gn,fontWeight:600}}>{fmt(t.n)}</td></tr>))}</tbody>
       </table></div>
     </Crd>}
-    <Crd title={<span>All Customers — Lifetime ({filtList.length})<DlBtn onClick={()=>downloadXlsx(sorted.map((t,i)=>[i+1,t.id,t.bk,t.res,Math.round(t.n),t.p]),["#","Pet + Parent","Bookings","Residency","Net Revenue","Phase"],"Awwzo_All_Customers")}/></span>}>
+    <Crd title={<span>All Customers — Lifetime ({filtList.length})<DlBtn onClick={()=>{const fdx=d=>d?d.toLocaleDateString("en-IN"):"";downloadXlsx(sorted.map((t,i)=>[i+1,t.id,t.type,t.bk,t.res,fdx(t.lb),fdx(t.fs),fdx(t.lr),fdx(t.nr),Math.round(t.n),t.p]),["#","Pet + Parent","Type","Bookings","Residency","Last Booking","First Subscription","Last Renewal","Renewal Due","Total Spent","Phase"],"Awwzo_All_Customers")}}/></span>}>
       <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
         <input type="text" placeholder="Search pet or parent name..." value={search} onChange={e=>setSearch(e.target.value)} style={{width:220}}/>
         <select value={phaseFilter} onChange={e=>setPhaseFilter(e.target.value)}>{allPhases.map(p=><option key={p} value={p}>{p}</option>)}</select>
+        <select value={typeFilter} onChange={e=>setTypeFilter(e.target.value)}>{["All","Subscription","Pay Per Use"].map(p=><option key={p} value={p}>{p==="All"?"All Types":p}</option>)}</select>
       </div>
       <div style={{overflowX:"auto",maxHeight:500,overflowY:"auto"}}><table>
         <thead style={{position:"sticky",top:0,background:crd,zIndex:1}}><tr style={{borderBottom:"1px solid "+bdr}}>
           <th>#</th><th>Pet + Parent</th>
+          <th style={{cursor:"pointer"}} onClick={()=>doSort("typeN")}>Type {custSort==="typeN"?(custDir<0?"\u25BC":"\u25B2"):""}</th>
           <th style={{cursor:"pointer"}} onClick={()=>doSort("bk")}>Bookings {custSort==="bk"?(custDir<0?"\u25BC":"\u25B2"):""}</th>
-          <th style={{cursor:"pointer"}} onClick={()=>doSort("res")}>Residency {custSort==="res"?(custDir<0?"\u25BC":"\u25B2"):""}</th>
-          <th style={{cursor:"pointer"}} onClick={()=>doSort("n")}>Net Revenue {custSort==="n"?(custDir<0?"\u25BC":"\u25B2"):""}</th>
+          <th style={{cursor:"pointer",whiteSpace:"nowrap"}} onClick={()=>doSort("lbT")}>Last Booking {custSort==="lbT"?(custDir<0?"\u25BC":"\u25B2"):""}</th>
+          <th style={{cursor:"pointer",whiteSpace:"nowrap"}} onClick={()=>doSort("fsT")}>First Sub {custSort==="fsT"?(custDir<0?"\u25BC":"\u25B2"):""}</th>
+          <th style={{cursor:"pointer",whiteSpace:"nowrap"}} onClick={()=>doSort("lrT")}>Last Renewal {custSort==="lrT"?(custDir<0?"\u25BC":"\u25B2"):""}</th>
+          <th style={{cursor:"pointer",whiteSpace:"nowrap"}} onClick={()=>doSort("nrT")}>Renewal Due {custSort==="nrT"?(custDir<0?"\u25BC":"\u25B2"):""}</th>
+          <th style={{cursor:"pointer",whiteSpace:"nowrap"}} onClick={()=>doSort("n")}>Total Spent {custSort==="n"?(custDir<0?"\u25BC":"\u25B2"):""}</th>
           <th>Phase</th>
         </tr></thead>
-        <tbody>{sorted.map((t,i)=>(<tr key={i} style={{borderBottom:"1px solid "+bdr+"20"}}><td style={{color:dm}}>{i+1}</td><td style={{color:tx,fontWeight:500}}>{t.id}</td><td style={{color:cy}}>{t.bk}</td><td style={{color:bl,fontWeight:600}}>{t.res}</td><td style={{color:gn,fontWeight:600}}>{fmt(t.n)}</td><td><PhBadge p={t.p}/></td></tr>))}</tbody>
+        <tbody>{sorted.map((t,i)=>{const overdue=t.nr&&t.nrT<nowT&&t.subCount>0;const dueSoon=t.nr&&t.nrT>=nowT&&(t.nrT-nowT)/864e5<=15;return(<tr key={i} style={{borderBottom:"1px solid "+bdr+"20"}}>
+          <td style={{color:dm}}>{i+1}</td><td style={{color:tx,fontWeight:500,whiteSpace:"nowrap"}}>{t.id}</td>
+          <td><span style={{color:t.typeN?pu:og,fontSize:10,background:(t.typeN?pu:og)+"18",padding:"2px 8px",borderRadius:4,whiteSpace:"nowrap"}}>{t.typeN?"Subscription":"PPU"}</span></td>
+          <td style={{color:cy,textAlign:"center"}}>{t.bk}</td>
+          <td style={{color:tx,whiteSpace:"nowrap"}}>{fd(t.lb)}</td>
+          <td style={{color:t.fs?pu:dm,whiteSpace:"nowrap"}}>{fd(t.fs)}</td>
+          <td style={{color:t.lr?tx:dm,whiteSpace:"nowrap"}}>{fd(t.lr)}</td>
+          <td style={{color:overdue?rd:dueSoon?am:t.nr?gn:dm,whiteSpace:"nowrap",fontWeight:overdue||dueSoon?600:400}}>{fd(t.nr)}{overdue?" \u26A0":""}</td>
+          <td style={{color:gn,fontWeight:600,whiteSpace:"nowrap"}}>{fmt(t.n)}</td>
+          <td><PhBadge p={t.p}/></td></tr>)})}</tbody>
       </table></div>
     </Crd>
   </div>);
